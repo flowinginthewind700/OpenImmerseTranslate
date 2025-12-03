@@ -86,7 +86,32 @@ const LANGUAGES = {
     
     // 引导提示
     setupGuide: '🎯 首次使用？请先配置 API',
-    setupGuideDesc: '点击此处设置您的 AI 翻译服务'
+    setupGuideDesc: '点击此处设置您的 AI 翻译服务',
+    
+    // 控制台
+    console: '控制台',
+    consoleReady: '准备就绪，点击翻译开始',
+    consoleStarting: '开始翻译页面...',
+    consoleCollecting: '正在收集页面文本...',
+    consoleFound: '发现 {count} 个文本块',
+    consoleTranslating: '正在翻译第 {current}/{total} 批...',
+    consoleCompleted: '翻译完成！共翻译 {count} 段文本',
+    consoleStopped: '翻译已停止',
+    consoleError: '错误：{message}',
+    
+    // 用户友好的错误消息
+    errorApiKeyInvalid: '🔑 API 密钥无效，请检查密钥是否正确',
+    errorApiKeyMissing: '请先配置 API 密钥',
+    errorNetworkFailed: '🌐 网络连接失败，请检查网络',
+    errorRateLimit: '⏳ API 请求过于频繁，正在自动重试...',
+    errorQuotaExceeded: '📊 API 配额已用尽，请检查账户余额',
+    errorInsufficientBalance: '⚠️ 账户余额不足或已暂停，请充值后重试',
+    errorServerError: '🔧 AI 服务暂时不可用，请稍后重试',
+    errorTimeout: '⏱️ 请求超时，网络可能不稳定',
+    errorInvalidResponse: 'AI 返回了无效的响应',
+    errorModelNotFound: '🤖 模型不存在，请检查模型名称',
+    errorPermissionDenied: '🚫 没有权限访问此 API',
+    errorUnknown: '❓ 发生未知错误'
   },
   
   'en': {
@@ -172,7 +197,32 @@ const LANGUAGES = {
     
     // Setup guide
     setupGuide: '🎯 First time? Configure API',
-    setupGuideDesc: 'Click here to set up your AI translation service'
+    setupGuideDesc: 'Click here to set up your AI translation service',
+    
+    // Console
+    console: 'Console',
+    consoleReady: 'Ready. Click translate to start',
+    consoleStarting: 'Starting page translation...',
+    consoleCollecting: 'Collecting page text...',
+    consoleFound: 'Found {count} text blocks',
+    consoleTranslating: 'Translating batch {current}/{total}...',
+    consoleCompleted: 'Complete! Translated {count} segments',
+    consoleStopped: 'Translation stopped',
+    consoleError: 'Error: {message}',
+    
+    // User-friendly error messages
+    errorApiKeyInvalid: '🔑 Invalid API key. Please check your key',
+    errorApiKeyMissing: 'Please configure API key first',
+    errorNetworkFailed: '🌐 Network error. Check your connection',
+    errorRateLimit: '⏳ Too many requests. Retrying automatically...',
+    errorQuotaExceeded: '📊 API quota exceeded. Check account balance',
+    errorInsufficientBalance: '⚠️ Insufficient balance or account suspended. Please recharge',
+    errorServerError: '🔧 AI service unavailable. Try again later',
+    errorTimeout: '⏱️ Request timed out. Network may be unstable',
+    errorInvalidResponse: 'Invalid response from AI',
+    errorModelNotFound: '🤖 Model not found. Check model name',
+    errorPermissionDenied: '🚫 Permission denied for this API',
+    errorUnknown: '❓ An unknown error occurred'
   }
 };
 

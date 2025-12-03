@@ -178,8 +178,144 @@ function initElements() {
     temperatureValue: document.getElementById('temperatureValue'),
     
     saveSettingsBtn: document.getElementById('saveSettingsBtn'),
-    toast: document.getElementById('toast')
+    toast: document.getElementById('toast'),
+    
+    // 控制台
+    consoleBody: document.getElementById('consoleBody'),
+    clearConsole: document.getElementById('clearConsole')
   };
+}
+
+// ==================== 控制台日志功能 ====================
+
+/**
+ * 添加控制台日志
+ * @param {string} message - 消息内容
+ * @param {string} type - 类型: info, success, warning, error, progress
+ */
+function logToConsole(message, type = 'info') {
+  if (!elements.consoleBody) return;
+  
+  const time = new Date().toLocaleTimeString('en-US', { 
+    hour12: false, 
+    hour: '2-digit', 
+    minute: '2-digit',
+    second: '2-digit'
+  });
+  
+  const line = document.createElement('div');
+  line.className = `console-line ${type}`;
+  line.innerHTML = `
+    <span class="console-time">${time}</span>
+    <span class="console-msg">${escapeHtml(message)}</span>
+  `;
+  
+  elements.consoleBody.appendChild(line);
+  
+  // 自动滚动到底部
+  elements.consoleBody.scrollTop = elements.consoleBody.scrollHeight;
+  
+  // 限制日志数量（保留最近50条）
+  while (elements.consoleBody.children.length > 50) {
+    elements.consoleBody.removeChild(elements.consoleBody.firstChild);
+  }
+}
+
+/**
+ * 清空控制台
+ */
+function clearConsole() {
+  if (!elements.consoleBody) return;
+  
+  const t = window.i18n.t;
+  elements.consoleBody.innerHTML = `
+    <div class="console-line info">
+      <span class="console-time"></span>
+      <span class="console-msg">${t('consoleReady')}</span>
+    </div>
+  `;
+}
+
+/**
+ * 解析并翻译错误消息
+ */
+function parseErrorMessage(error) {
+  const t = window.i18n.t;
+  const msg = error.message || error.toString() || '';
+  const msgLower = msg.toLowerCase();
+  
+  // 账户余额不足/暂停 - 优先检查
+  if (msgLower.includes('suspended') || 
+      msgLower.includes('insufficient balance') ||
+      msgLower.includes('recharge')) {
+    return t('errorInsufficientBalance');
+  }
+  
+  // API 密钥相关
+  if (msgLower.includes('invalid') && msgLower.includes('key') || 
+      msgLower.includes('unauthorized') || 
+      msgLower.includes('401')) {
+    return t('errorApiKeyInvalid');
+  }
+  
+  // 配额/限流相关
+  if (msgLower.includes('rate limit') || 
+      msgLower.includes('too many requests') ||
+      msgLower.includes('429') ||
+      msgLower.includes('concurrency')) {
+    return t('errorRateLimit');
+  }
+  
+  if (msgLower.includes('quota') || 
+      msgLower.includes('exceeded')) {
+    return t('errorQuotaExceeded');
+  }
+  
+  // 网络相关
+  if (msgLower.includes('network') || 
+      msgLower.includes('failed to fetch') ||
+      msgLower.includes('connection')) {
+    return t('errorNetworkFailed');
+  }
+  
+  if (msgLower.includes('timeout')) {
+    return t('errorTimeout');
+  }
+  
+  // 服务器错误
+  if (msgLower.includes('500') || 
+      msgLower.includes('502') ||
+      msgLower.includes('503') ||
+      msgLower.includes('server error')) {
+    return t('errorServerError');
+  }
+  
+  // 模型相关
+  if (msgLower.includes('model') && 
+      (msgLower.includes('not found') || msgLower.includes('does not exist'))) {
+    return t('errorModelNotFound');
+  }
+  
+  // 权限相关
+  if (msgLower.includes('permission') || msgLower.includes('403')) {
+    return t('errorPermissionDenied');
+  }
+  
+  // 返回原始消息（截断过长的）
+  if (msg.length > 100) {
+    return msg.substring(0, 100) + '...';
+  }
+  
+  return msg || t('errorUnknown');
+}
+
+/**
+ * HTML转义
+ */
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
 }
 
 // 加载配置
@@ -258,6 +394,11 @@ function initEventListeners() {
   
   // 保存设置
   elements.saveSettingsBtn.addEventListener('click', handleSaveSettings);
+  
+  // 清空控制台
+  if (elements.clearConsole) {
+    elements.clearConsole.addEventListener('click', clearConsole);
+  }
 }
 
 // 更新UI
@@ -411,6 +552,7 @@ async function handleTranslatePage() {
   
   if (!currentConfig.apiKey) {
     showToast(t('pleaseConfigureApi'), 'error');
+    logToConsole(t('errorApiKeyMissing'), 'error');
     showPanel('settings');
     return;
   }
@@ -420,20 +562,24 @@ async function handleTranslatePage() {
     
     if (!tab?.id) {
       showToast(t('cannotGetPage'), 'error');
+      logToConsole(t('cannotGetPage'), 'error');
       return;
     }
     
     if (tab.url.startsWith('chrome://') || tab.url.startsWith('chrome-extension://') || 
         tab.url.startsWith('edge://') || tab.url.startsWith('about:')) {
       showToast(t('cannotUsePage'), 'error');
+      logToConsole(t('cannotUsePage'), 'warning');
       return;
     }
     
     setTranslatingState(true);
+    logToConsole(t('consoleStarting'), 'info');
     
     let scriptLoaded = await checkContentScript(tab.id);
     
     if (!scriptLoaded) {
+      logToConsole(t('consoleCollecting'), 'info');
       const injected = await injectContentScript(tab.id);
       
       if (!injected) {
@@ -462,7 +608,9 @@ async function handleTranslatePage() {
       errorMsg = t('pleaseRefreshPage');
     }
     
+    const friendlyError = parseErrorMessage(error);
     showToast(errorMsg, 'error');
+    logToConsole(friendlyError, 'error');
     updateStatus('error', t('translateError'), errorMsg);
     setTranslatingState(false);
   }
@@ -510,6 +658,7 @@ async function handleStopTranslate() {
     
     setTranslatingState(false);
     updateStatus('idle', t('stopped'), t('stoppedDesc'));
+    logToConsole(t('consoleStopped'), 'warning');
     
   } catch (error) {
     console.error('Stop error:', error);
@@ -626,20 +775,36 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === 'translationComplete') {
     setTranslatingState(false);
     updateStatus('success', t('translateComplete'), `${message.count || 0} segments`);
+    const completeMsg = t('consoleCompleted').replace('{count}', message.count || 0);
+    logToConsole(completeMsg, 'success');
   } else if (message.action === 'translationError') {
     setTranslatingState(false);
     updateStatus('error', t('translateError'), message.error || '');
-    showToast(message.error || t('translateError'), 'error');
+    const friendlyError = parseErrorMessage({ message: message.error });
+    logToConsole(friendlyError, 'error');
+    showToast(friendlyError, 'error');
   } else if (message.action === 'translationProgress') {
     updateStatus('working', t('translating'), `${message.current}/${message.total}`);
+    // 每5个进度更新一次日志，避免刷屏
+    if (message.current % 5 === 0 || message.current === message.total) {
+      const progressMsg = t('consoleTranslating')
+        .replace('{current}', message.current)
+        .replace('{total}', message.total);
+      logToConsole(progressMsg, 'progress');
+    }
   } else if (message.action === 'translationStateChanged') {
     // 同步悬浮按钮触发的状态变化
     if (message.status === 'translating') {
       setTranslatingState(true);
+      logToConsole(t('consoleStarting'), 'info');
     } else if (message.status === 'stopped') {
       setTranslatingState(false);
       updateStatus('idle', t('stopped'), t('stoppedDesc'));
+      logToConsole(t('consoleStopped'), 'warning');
     }
+  } else if (message.action === 'consoleLog') {
+    // 直接从内容脚本发送的日志
+    logToConsole(message.text, message.type || 'info');
   }
 });
 

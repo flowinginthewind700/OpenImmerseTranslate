@@ -12,20 +12,22 @@
 
 // ==================== 配置常量 ====================
 const CONFIG = {
-  // 视口检测
-  ROOT_MARGIN: '0px 0px 100% 0px', // 预加载视口下方 1 屏
-  THRESHOLD: 0.1, // 元素 10% 可见即触发
+  // 视口检测 - 优化预加载范围
+  ROOT_MARGIN: '50% 0px 100% 0px', // 预加载上方50%+下方1屏
+  THRESHOLD: 0.01, // 1%可见即触发，更快响应
   
-  // 批量翻译 - 降低并发避免限流
-  BATCH_SIZE: 5, // 每批翻译数量（降低以减少token）
-  BATCH_DELAY: 1500, // 批次间延迟(ms) - 增加间隔避免限流
-  DEBOUNCE_DELAY: 300, // 防抖延迟(ms)
+  // 极速翻译配置
+  BATCH_SIZE: 8, // 每批翻译数量
+  IMMEDIATE_BATCH_SIZE: 15, // 首屏立即翻译数量
+  BATCH_DELAY: 100, // 批次间延迟(ms) - 极速
+  DEBOUNCE_DELAY: 30, // 防抖延迟(ms) - 极速
+  MAX_CONCURRENT_BATCHES: 3, // 最大并发批次
   
   // 文本过滤
-  MIN_TEXT_LENGTH: 2, // 降低最小长度以捕获更多文本
+  MIN_TEXT_LENGTH: 2,
   MAX_TEXT_LENGTH: 5000,
   
-  // 跳过的标签 - 精简列表，只跳过真正不需要翻译的
+  // 跳过的标签
   SKIP_TAGS: new Set([
     'SCRIPT', 'STYLE', 'NOSCRIPT', 'IFRAME', 'OBJECT', 'EMBED',
     'SVG', 'MATH', 'CANVAS', 'VIDEO', 'AUDIO', 'MAP', 'AREA',
@@ -36,14 +38,14 @@ const CONFIG = {
   // 跳过的类名
   SKIP_CLASSES: ['oit-wrapper', 'oit-translation', 'oit-original', 'notranslate', 'no-translate'],
   
-  // 需要深度遍历的容器标签（这些标签内的文本也要翻译）
+  // 容器标签
   CONTAINER_TAGS: new Set([
     'DIV', 'SPAN', 'P', 'A', 'LI', 'TD', 'TH', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6',
     'ARTICLE', 'SECTION', 'MAIN', 'ASIDE', 'HEADER', 'FOOTER', 'NAV',
     'LABEL', 'LEGEND', 'FIGCAPTION', 'BLOCKQUOTE', 'CITE', 'Q',
     'STRONG', 'EM', 'B', 'I', 'U', 'SMALL', 'MARK', 'DEL', 'INS', 'SUB', 'SUP',
     'DT', 'DD', 'ADDRESS', 'TIME', 'ABBR', 'DFN', 'SUMMARY', 'DETAILS',
-    'BUTTON' // 按钮文字也翻译
+    'BUTTON'
   ])
 };
 
@@ -55,11 +57,16 @@ class TranslationState {
     this.config = null;
     this.observer = null;
     this.translatedCount = 0;
-    this.pendingElements = new Set(); // 待翻译元素
-    this.translatingElements = new Set(); // 正在翻译的元素
-    this.completedElements = new WeakSet(); // 已完成翻译的元素
-    this.batchQueue = []; // 批量翻译队列
+    this.pendingElements = new Set();
+    this.translatingElements = new Set();
+    this.completedElements = new WeakSet();
+    this.batchQueue = [];
     this.batchTimer = null;
+    // 性能优化新增
+    this.activeBatches = 0; // 当前并发批次数
+    this.isFirstBatch = true; // 是否首批（立即处理）
+    this.processedTexts = new Set(); // 已处理文本去重
+    this.blockMap = new Map(); // 元素到块的映射（缓存）
   }
   
   reset() {
@@ -69,6 +76,10 @@ class TranslationState {
     this.pendingElements.clear();
     this.translatingElements.clear();
     this.batchQueue = [];
+    this.activeBatches = 0;
+    this.isFirstBatch = true;
+    this.processedTexts.clear();
+    this.blockMap.clear();
     if (this.batchTimer) {
       clearTimeout(this.batchTimer);
       this.batchTimer = null;
@@ -134,6 +145,20 @@ function broadcastState(status) {
   }
 }
 
+// 发送日志到 popup 控制台
+function sendLog(text, type = 'info') {
+  console.log(`[OpenImmerseTranslate] ${type.toUpperCase()}: ${text}`);
+  try {
+    chrome.runtime.sendMessage({
+      action: 'consoleLog',
+      text: text,
+      type: type
+    });
+  } catch (e) {
+    // popup 可能已关闭，忽略
+  }
+}
+
 // 重置悬浮按钮到空闲状态
 function resetFabToIdle() {
   if (!fab) return;
@@ -153,7 +178,10 @@ function resetFabToIdle() {
 // ==================== 核心翻译逻辑 ====================
 
 /**
- * 开始翻译 - 视口优先算法
+ * 开始翻译 - 极速视口优先算法
+ * 1. 立即翻译视口内容（无延迟）
+ * 2. 异步收集并观察其他内容
+ * 3. 并发批次处理
  */
 function startTranslation(config) {
   if (state.isActive) {
@@ -164,25 +192,153 @@ function startTranslation(config) {
   state.reset();
   state.config = config;
   state.isActive = true;
+  state.isFirstBatch = true;
   
-  console.log('[OpenImmerseTranslate] Starting viewport-first translation');
+  const startTime = performance.now();
+  sendLog('🚀 开始扫描页面...', 'info');
   
-  // 1. 收集所有可翻译的文本块
-  const textBlocks = collectTextBlocks();
-  console.log(`[OpenImmerseTranslate] Found ${textBlocks.length} text blocks`);
+  // 第一步：立即收集并翻译视口内可见内容（同步，极快）
+  const viewportBlocks = collectViewportBlocks();
+  const scanTime = (performance.now() - startTime).toFixed(0);
   
-  if (textBlocks.length === 0) {
-    notifyComplete();
-    return;
+  if (viewportBlocks.length > 0) {
+    sendLog(`⚡ 视口扫描完成: ${viewportBlocks.length} 个文本块 (${scanTime}ms)`, 'success');
+    sendLog(`📤 开始翻译首屏内容...`, 'info');
+    // 立即开始翻译视口内容，无需等待
+    immediateTranslate(viewportBlocks);
+  } else {
+    sendLog(`⚠️ 视口内未发现可翻译文本`, 'warning');
   }
   
-  // 2. 创建 Intersection Observer 监听视口
-  createObserver(textBlocks);
+  // 第二步：异步收集页面其他内容（不阻塞主线程）
+  requestIdleCallback(() => {
+    if (!state.isActive || state.shouldStop) return;
+    
+    sendLog('📄 正在扫描页面其他内容...', 'info');
+    const allBlocks = collectTextBlocks();
+    const remainingBlocks = allBlocks.filter(b => !state.processedTexts.has(b.text));
+    
+    if (remainingBlocks.length > 0) {
+      sendLog(`📋 发现 ${remainingBlocks.length} 个待翻译文本块`, 'info');
+      createObserver(remainingBlocks);
+      remainingBlocks.forEach(block => {
+        state.blockMap.set(block.element, block);
+        state.observer.observe(block.element);
+      });
+    } else {
+      sendLog('✅ 页面扫描完成，无更多内容', 'success');
+    }
+  }, { timeout: 100 });
+}
+
+/**
+ * 收集视口内可见的文本块（极速版）
+ */
+function collectViewportBlocks() {
+  const blocks = [];
+  const viewportHeight = window.innerHeight;
+  const viewportTop = window.scrollY;
+  const viewportBottom = viewportTop + viewportHeight;
   
-  // 3. 开始观察所有文本块
-  textBlocks.forEach(block => {
-    state.observer.observe(block.element);
+  // 快速选择器 - 只选常见文本容器
+  const selectors = 'p,span,div,a,li,td,th,h1,h2,h3,h4,h5,h6,label,button,blockquote';
+  const elements = document.querySelectorAll(selectors);
+  
+  for (const el of elements) {
+    if (blocks.length >= CONFIG.IMMEDIATE_BATCH_SIZE * 2) break; // 限制首批数量
+    
+    const rect = el.getBoundingClientRect();
+    const elTop = rect.top + viewportTop;
+    const elBottom = elTop + rect.height;
+    
+    // 检查是否在视口内
+    if (elBottom < viewportTop || elTop > viewportBottom) continue;
+    if (rect.width === 0 || rect.height === 0) continue;
+    
+    // 快速过滤
+    if (CONFIG.SKIP_TAGS.has(el.tagName)) continue;
+    if (el.closest('.oit-wrapper')) continue;
+    
+    // 获取直接文本
+    const text = getDirectTextContent(el);
+    if (!text || text.length < CONFIG.MIN_TEXT_LENGTH) continue;
+    if (state.processedTexts.has(text)) continue;
+    if (/^[\d\s\p{P}\p{S}]+$/u.test(text)) continue;
+    
+    // 跳过已是目标语言
+    if (state.config?.autoDetect && isTargetLanguage(text)) continue;
+    
+    const textNode = findTextNode(el, text);
+    if (textNode) {
+      state.processedTexts.add(text);
+      blocks.push({ element: el, textNode, text });
+    }
+  }
+  
+  // 按Y坐标排序，从上到下
+  blocks.sort((a, b) => {
+    const aRect = a.element.getBoundingClientRect();
+    const bRect = b.element.getBoundingClientRect();
+    return aRect.top - bRect.top;
   });
+  
+  return blocks;
+}
+
+/**
+ * 立即翻译（首屏无延迟）
+ */
+async function immediateTranslate(blocks) {
+  if (blocks.length === 0) return;
+  
+  // 分批但并发执行
+  const batches = [];
+  for (let i = 0; i < blocks.length; i += CONFIG.IMMEDIATE_BATCH_SIZE) {
+    batches.push(blocks.slice(i, i + CONFIG.IMMEDIATE_BATCH_SIZE));
+  }
+  
+  sendLog(`🔄 首屏分为 ${batches.length} 批，开始并发翻译...`, 'info');
+  
+  // 并发执行所有首屏批次
+  let hasError = false;
+  let lastError = null;
+  
+  const promises = batches.map((batch, index) => {
+    return new Promise(resolve => {
+      // 微小延迟避免同时发送太多请求
+      setTimeout(async () => {
+        try {
+          sendLog(`📡 发送第 ${index + 1}/${batches.length} 批请求 (${batch.length} 条)...`, 'progress');
+          await translateBatch(batch);
+          sendLog(`✓ 第 ${index + 1} 批完成`, 'success');
+        } catch (e) {
+          hasError = true;
+          lastError = e;
+          // 解析友好错误并显示完整信息
+          const friendlyMsg = parseFriendlyError(e.message);
+          sendLog(`❌ LLM服务报错: ${friendlyMsg}`, 'error');
+          // 如果是账户问题，显示原始消息帮助用户诊断
+          if (e.message && e.message.length < 200) {
+            sendLog(`📋 原始信息: ${e.message}`, 'warning');
+          }
+        }
+        resolve();
+      }, index * 50);
+    });
+  });
+  
+  await Promise.all(promises);
+  state.isFirstBatch = false;
+  
+  if (hasError) {
+    sendLog(`⚠️ 翻译过程中出现错误，请检查API设置`, 'warning');
+    // 通知错误
+    if (lastError) {
+      notifyError(parseFriendlyError(lastError.message));
+    }
+  } else if (state.translatedCount > 0) {
+    sendLog(`🎉 首屏翻译完成！共 ${state.translatedCount} 段`, 'success');
+  }
 }
 
 /**
@@ -202,24 +358,24 @@ function stopTranslation() {
 }
 
 /**
- * 收集页面中所有可翻译的文本块
- * 增强版：更全面的文本提取
+ * 收集页面中所有可翻译的文本块（优化版）
+ * 使用更高效的DOM遍历策略
  */
 function collectTextBlocks() {
   const blocks = [];
   const processedNodes = new WeakSet();
-  const processedTexts = new Set(); // 避免重复文本
   
-  // 方法1: 遍历所有文本节点（核心方法）
+  // 使用已有的 processedTexts 避免重复
+  const processedTexts = state.processedTexts;
+  
+  // 单次高效遍历
   collectTextNodes(document.body, blocks, processedNodes, processedTexts);
   
-  // 方法2: 额外扫描特定元素的直接文本内容
-  collectElementTexts(document.body, blocks, processedNodes, processedTexts);
+  // Shadow DOM 仅在必要时扫描
+  if (document.querySelectorAll('*').length < 5000) {
+    collectShadowDOMTexts(document.body, blocks, processedNodes, processedTexts);
+  }
   
-  // 方法3: 扫描 Shadow DOM（如果有）
-  collectShadowDOMTexts(document.body, blocks, processedNodes, processedTexts);
-  
-  console.log(`[OpenImmerseTranslate] Collected ${blocks.length} text blocks`);
   return blocks;
 }
 
@@ -424,13 +580,16 @@ function createObserver(textBlocks) {
 }
 
 /**
- * 将文本块加入翻译队列
- * 使用防抖批量处理
+ * 将文本块加入翻译队列（极速版）
  */
 function queueForTranslation(block) {
+  // 去重检查
+  if (state.processedTexts.has(block.text)) return;
+  state.processedTexts.add(block.text);
+  
   state.batchQueue.push(block);
   
-  // 防抖：等待更多元素加入队列
+  // 极短防抖
   if (state.batchTimer) {
     clearTimeout(state.batchTimer);
   }
@@ -441,59 +600,86 @@ function queueForTranslation(block) {
 }
 
 /**
- * 处理批量翻译队列
+ * 处理批量翻译队列（并发版）
  */
 async function processBatchQueue() {
   if (!state.isActive || state.shouldStop || state.batchQueue.length === 0) {
     return;
   }
   
-  // 取出一批待翻译的文本块
+  // 检查并发限制
+  if (state.activeBatches >= CONFIG.MAX_CONCURRENT_BATCHES) {
+    // 延迟重试
+    setTimeout(() => processBatchQueue(), CONFIG.BATCH_DELAY);
+    return;
+  }
+  
+  // 取出一批
   const batch = state.batchQueue.splice(0, CONFIG.BATCH_SIZE);
   
-  // 过滤掉已完成的
+  // 快速过滤
   const validBatch = batch.filter(block => 
     !state.completedElements.has(block.element) && 
     !state.translatingElements.has(block)
   );
   
   if (validBatch.length === 0) {
-    // 继续处理队列中剩余的
     if (state.batchQueue.length > 0) {
-      setTimeout(() => processBatchQueue(), CONFIG.BATCH_DELAY);
+      // 立即处理下一批
+      setImmediate(() => processBatchQueue());
     }
     return;
   }
   
-  // 标记为正在翻译
+  // 标记状态
   validBatch.forEach(block => {
     state.pendingElements.delete(block);
     state.translatingElements.add(block);
   });
   
-  try {
-    // 批量翻译
-    await translateBatch(validBatch);
-  } catch (error) {
-    console.error('[OpenImmerseTranslate] Batch error:', error);
-    notifyError(error.message);
-  }
+  state.activeBatches++;
   
-  // 继续处理队列
-  if (state.batchQueue.length > 0 && state.isActive && !state.shouldStop) {
-    setTimeout(() => processBatchQueue(), CONFIG.BATCH_DELAY);
-  } else if (state.batchQueue.length === 0 && state.pendingElements.size === 0 && 
-             state.translatingElements.size === 0) {
-    // 当前视口翻译完成
-    notifyProgress(state.translatedCount, state.translatedCount);
+  // 异步执行，不阻塞
+  translateBatchAsync(validBatch).finally(() => {
+    state.activeBatches--;
+    
+    // 继续处理队列
+    if (state.batchQueue.length > 0 && state.isActive && !state.shouldStop) {
+      // 极短延迟继续
+      setTimeout(() => processBatchQueue(), CONFIG.BATCH_DELAY);
+    } else if (state.batchQueue.length === 0 && state.pendingElements.size === 0 && 
+               state.translatingElements.size === 0 && state.activeBatches === 0) {
+      notifyProgress(state.translatedCount, state.translatedCount);
+    }
+  });
+  
+  // 立即尝试启动更多并发批次
+  if (state.batchQueue.length > 0 && state.activeBatches < CONFIG.MAX_CONCURRENT_BATCHES) {
+    setImmediate(() => processBatchQueue());
   }
 }
+
+/**
+ * 异步批量翻译
+ */
+async function translateBatchAsync(blocks) {
+  try {
+    await translateBatch(blocks);
+  } catch (error) {
+    console.error('[OpenImmerseTranslate] Batch error:', error);
+    // 不中断整体流程
+  }
+}
+
+// setImmediate polyfill
+const setImmediate = window.setImmediate || ((fn) => setTimeout(fn, 0));
 
 /**
  * 批量翻译文本块
  */
 async function translateBatch(blocks) {
   const texts = blocks.map(b => b.text);
+  const previewText = texts[0]?.substring(0, 30) + (texts[0]?.length > 30 ? '...' : '');
   
   try {
     // 调用翻译 API
@@ -504,12 +690,21 @@ async function translateBatch(blocks) {
     });
     
     if (response.error) {
+      // 解析并友好化错误信息
+      const friendlyError = parseFriendlyError(response.error);
+      sendLog(`❌ API错误: ${friendlyError}`, 'error');
       throw new Error(response.error);
     }
     
     const translations = response.translations;
     
+    if (!translations || translations.length === 0) {
+      sendLog(`⚠️ API返回空结果`, 'warning');
+      return;
+    }
+    
     // 应用翻译结果
+    let appliedCount = 0;
     for (let i = 0; i < blocks.length; i++) {
       if (state.shouldStop) break;
       
@@ -519,6 +714,7 @@ async function translateBatch(blocks) {
       if (translation && translation !== block.text && !isSameContent(block.text, translation)) {
         applyTranslation(block, translation);
         state.translatedCount++;
+        appliedCount++;
       }
       
       // 标记为已完成
@@ -541,6 +737,65 @@ async function translateBatch(blocks) {
     });
     throw error;
   }
+}
+
+/**
+ * 解析友好的错误信息
+ */
+function parseFriendlyError(errorMsg) {
+  const msg = (errorMsg || '').toLowerCase();
+  
+  // 账户余额不足/暂停
+  if (msg.includes('suspended') || msg.includes('insufficient balance') || msg.includes('recharge')) {
+    return '⚠️ 账户余额不足或已暂停，请充值后重试';
+  }
+  
+  // API密钥无效
+  if (msg.includes('invalid') && msg.includes('key') || msg.includes('401') || msg.includes('unauthorized')) {
+    return '🔑 API密钥无效，请检查设置';
+  }
+  
+  // 请求频率限制
+  if (msg.includes('rate limit') || msg.includes('429') || msg.includes('too many') || msg.includes('concurrency')) {
+    return '⏳ API请求过于频繁，正在自动重试...';
+  }
+  
+  // 配额用尽
+  if (msg.includes('quota') || msg.includes('exceeded')) {
+    return '📊 API配额已用尽，请检查账户额度';
+  }
+  
+  // 超时
+  if (msg.includes('timeout')) {
+    return '⏱️ 请求超时，网络可能不稳定';
+  }
+  
+  // 网络错误
+  if (msg.includes('network') || msg.includes('fetch') || msg.includes('connection') || msg.includes('failed to fetch')) {
+    return '🌐 网络连接失败，请检查网络';
+  }
+  
+  // 服务器错误
+  if (msg.includes('500') || msg.includes('502') || msg.includes('503') || msg.includes('server error')) {
+    return '🔧 AI服务暂时不可用，请稍后重试';
+  }
+  
+  // 模型不存在
+  if (msg.includes('model') && (msg.includes('not found') || msg.includes('not exist') || msg.includes('does not exist'))) {
+    return '🤖 模型不存在，请检查模型名称';
+  }
+  
+  // 权限问题
+  if (msg.includes('permission') || msg.includes('403') || msg.includes('forbidden')) {
+    return '🚫 没有权限访问此API';
+  }
+  
+  // 截断过长的错误信息
+  if (errorMsg && errorMsg.length > 100) {
+    return errorMsg.substring(0, 100) + '...';
+  }
+  
+  return errorMsg || '❓ 未知错误';
 }
 
 /**

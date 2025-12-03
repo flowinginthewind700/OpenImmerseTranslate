@@ -43,7 +43,7 @@ class RateLimiter {
   }
 }
 
-const rateLimiter = new RateLimiter(2, 1200); // 最多2并发，间隔1.2秒
+const rateLimiter = new RateLimiter(3, 300); // 最多3并发，间隔300ms（极速模式）
 
 // ==================== 重试机制 ====================
 async function withRetry(fn, maxRetries = 3, baseDelay = 2000) {
