@@ -297,6 +297,25 @@ body {
   opacity: 0.9;
 }
 
+/* 翻译中状态 - 开关按钮 */
+.action-btn.translating {
+  background: linear-gradient(135deg, var(--apple-orange) 0%, var(--apple-red) 100%);
+  box-shadow: 0 2px 8px rgba(255, 149, 0, 0.4);
+}
+
+.action-btn.translating:hover {
+  box-shadow: 0 4px 12px rgba(255, 149, 0, 0.5);
+}
+
+.action-btn.translating svg {
+  animation: pulse-icon 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse-icon {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.7; transform: scale(0.95); }
+}
+
 /* 状态卡片 */
 .status-section {
   margin-bottom: 20px;

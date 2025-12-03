@@ -22,19 +22,29 @@ const CONFIG = {
   DEBOUNCE_DELAY: 300, // 防抖延迟(ms)
   
   // 文本过滤
-  MIN_TEXT_LENGTH: 3,
+  MIN_TEXT_LENGTH: 2, // 降低最小长度以捕获更多文本
   MAX_TEXT_LENGTH: 5000,
   
-  // 跳过的标签
+  // 跳过的标签 - 精简列表，只跳过真正不需要翻译的
   SKIP_TAGS: new Set([
     'SCRIPT', 'STYLE', 'NOSCRIPT', 'IFRAME', 'OBJECT', 'EMBED',
     'SVG', 'MATH', 'CANVAS', 'VIDEO', 'AUDIO', 'MAP', 'AREA',
     'CODE', 'PRE', 'KBD', 'VAR', 'SAMP', 'INPUT', 'TEXTAREA',
-    'SELECT', 'BUTTON', 'IMG', 'BR', 'HR', 'META', 'LINK', 'HEAD', 'TITLE'
+    'SELECT', 'IMG', 'BR', 'HR', 'META', 'LINK', 'HEAD', 'TITLE'
   ]),
   
   // 跳过的类名
-  SKIP_CLASSES: ['oit-wrapper', 'oit-translation', 'oit-original', 'notranslate', 'no-translate']
+  SKIP_CLASSES: ['oit-wrapper', 'oit-translation', 'oit-original', 'notranslate', 'no-translate'],
+  
+  // 需要深度遍历的容器标签（这些标签内的文本也要翻译）
+  CONTAINER_TAGS: new Set([
+    'DIV', 'SPAN', 'P', 'A', 'LI', 'TD', 'TH', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6',
+    'ARTICLE', 'SECTION', 'MAIN', 'ASIDE', 'HEADER', 'FOOTER', 'NAV',
+    'LABEL', 'LEGEND', 'FIGCAPTION', 'BLOCKQUOTE', 'CITE', 'Q',
+    'STRONG', 'EM', 'B', 'I', 'U', 'SMALL', 'MARK', 'DEL', 'INS', 'SUB', 'SUP',
+    'DT', 'DD', 'ADDRESS', 'TIME', 'ABBR', 'DFN', 'SUMMARY', 'DETAILS',
+    'BUTTON' // 按钮文字也翻译
+  ])
 };
 
 // ==================== 状态管理 ====================
@@ -77,26 +87,68 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   
   switch (message.action) {
     case 'ping':
-      // 用于检测内容脚本是否已加载
-      sendResponse({ pong: true });
+      // 用于检测内容脚本是否已加载，同时返回当前翻译状态
+      sendResponse({ pong: true, isTranslating: state.isActive });
       break;
     case 'translatePage':
       startTranslation(message.config);
       sendResponse({ success: true });
+      // 通知状态变化
+      broadcastState('translating');
       break;
     case 'stopTranslate':
       stopTranslation();
       sendResponse({ success: true });
+      // 通知状态变化
+      broadcastState('stopped');
+      // 更新悬浮按钮状态
+      resetFabToIdle();
       break;
     case 'removeTranslations':
       removeAllTranslations();
       sendResponse({ success: true });
+      break;
+    case 'getTranslationState':
+      // 返回当前翻译状态，用于popup同步
+      sendResponse({ 
+        isTranslating: state.isActive,
+        translatedCount: state.translatedCount
+      });
       break;
     default:
       sendResponse({ success: false, error: 'Unknown action' });
   }
   return true;
 });
+
+// 广播翻译状态变化
+function broadcastState(status) {
+  try {
+    chrome.runtime.sendMessage({
+      action: 'translationStateChanged',
+      status: status,
+      isTranslating: state.isActive
+    });
+  } catch (e) {
+    // popup 可能已关闭，忽略错误
+  }
+}
+
+// 重置悬浮按钮到空闲状态
+function resetFabToIdle() {
+  if (!fab) return;
+  
+  const fabBtn = fab.querySelector('.oit-fab-btn');
+  const tooltip = fab.querySelector('.oit-fab-tooltip');
+  
+  fabBtn.classList.remove('translating', 'completed');
+  fabBtn.innerHTML = `
+    <svg viewBox="0 0 24 24" fill="none">
+      <path d="M12.87 15.07l-2.54-2.51.03-.03A17.52 17.52 0 0014.07 6H17V4h-7V2H8v2H1v2h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11.76-2.04zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2l-4.5-12zm-2.62 7l1.62-4.33L19.12 17h-3.24z" fill="currentColor"/>
+    </svg>
+  `;
+  tooltip.textContent = '翻译页面';
+}
 
 // ==================== 核心翻译逻辑 ====================
 
@@ -151,23 +203,40 @@ function stopTranslation() {
 
 /**
  * 收集页面中所有可翻译的文本块
- * 返回包含元素和文本的对象数组
+ * 增强版：更全面的文本提取
  */
 function collectTextBlocks() {
   const blocks = [];
-  const processedElements = new WeakSet();
+  const processedNodes = new WeakSet();
+  const processedTexts = new Set(); // 避免重复文本
   
-  // 遍历所有文本节点
+  // 方法1: 遍历所有文本节点（核心方法）
+  collectTextNodes(document.body, blocks, processedNodes, processedTexts);
+  
+  // 方法2: 额外扫描特定元素的直接文本内容
+  collectElementTexts(document.body, blocks, processedNodes, processedTexts);
+  
+  // 方法3: 扫描 Shadow DOM（如果有）
+  collectShadowDOMTexts(document.body, blocks, processedNodes, processedTexts);
+  
+  console.log(`[OpenImmerseTranslate] Collected ${blocks.length} text blocks`);
+  return blocks;
+}
+
+/**
+ * 遍历文本节点
+ */
+function collectTextNodes(root, blocks, processedNodes, processedTexts) {
   const walker = document.createTreeWalker(
-    document.body,
+    root,
     NodeFilter.SHOW_TEXT,
     {
       acceptNode: (node) => {
         const parent = node.parentElement;
         if (!parent) return NodeFilter.FILTER_REJECT;
         
-        // 跳过已处理
-        if (processedElements.has(parent)) return NodeFilter.FILTER_REJECT;
+        // 跳过已处理的节点
+        if (processedNodes.has(node)) return NodeFilter.FILTER_REJECT;
         
         // 跳过不可见元素
         if (!isElementVisible(parent)) return NodeFilter.FILTER_REJECT;
@@ -189,8 +258,11 @@ function collectTextBlocks() {
           return NodeFilter.FILTER_REJECT;
         }
         
-        // 跳过纯数字/标点
-        if (/^[\d\s\p{P}]+$/u.test(text)) return NodeFilter.FILTER_REJECT;
+        // 跳过纯数字/标点/空白
+        if (/^[\d\s\p{P}\p{S}]+$/u.test(text)) return NodeFilter.FILTER_REJECT;
+        
+        // 跳过纯URL或邮箱
+        if (/^(https?:\/\/|www\.|[\w.-]+@[\w.-]+\.\w+)/.test(text)) return NodeFilter.FILTER_REJECT;
         
         return NodeFilter.FILTER_ACCEPT;
       }
@@ -200,25 +272,124 @@ function collectTextBlocks() {
   let node;
   while (node = walker.nextNode()) {
     const parent = node.parentElement;
-    if (!processedElements.has(parent)) {
-      processedElements.add(parent);
-      
-      const text = node.textContent.trim();
-      
-      // 检查是否已是目标语言
-      if (state.config.autoDetect && isTargetLanguage(text)) {
-        continue;
-      }
+    const text = node.textContent.trim();
+    
+    // 跳过重复文本
+    if (processedTexts.has(text)) continue;
+    
+    // 检查是否已是目标语言
+    if (state.config?.autoDetect && isTargetLanguage(text)) continue;
+    
+    processedNodes.add(node);
+    processedTexts.add(text);
+    
+    blocks.push({
+      element: parent,
+      textNode: node,
+      text: text
+    });
+  }
+}
+
+/**
+ * 扫描元素的直接文本内容（处理某些特殊情况）
+ */
+function collectElementTexts(root, blocks, processedNodes, processedTexts) {
+  // 扫描可能被遗漏的元素
+  const selectors = [
+    // 常见文本容器
+    'p', 'span', 'div', 'a', 'li', 'td', 'th', 'label',
+    'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+    // 特殊元素
+    '[data-text]', '[aria-label]', '[title]',
+    // 按钮和链接
+    'button', 'a[href]',
+    // 列表项
+    'dt', 'dd',
+    // 引用
+    'blockquote', 'q', 'cite'
+  ].join(',');
+  
+  const elements = root.querySelectorAll(selectors);
+  
+  elements.forEach(el => {
+    if (processedNodes.has(el)) return;
+    if (!isElementVisible(el)) return;
+    if (CONFIG.SKIP_TAGS.has(el.tagName)) return;
+    if (CONFIG.SKIP_CLASSES.some(cls => el.classList.contains(cls))) return;
+    if (el.closest('.oit-wrapper')) return;
+    
+    // 获取元素的直接文本内容（排除子元素的文本）
+    const directText = getDirectTextContent(el);
+    if (!directText || directText.length < CONFIG.MIN_TEXT_LENGTH) return;
+    if (processedTexts.has(directText)) return;
+    
+    // 跳过纯数字/标点
+    if (/^[\d\s\p{P}\p{S}]+$/u.test(directText)) return;
+    
+    // 检查是否已是目标语言
+    if (state.config?.autoDetect && isTargetLanguage(directText)) return;
+    
+    // 找到对应的文本节点
+    const textNode = findTextNode(el, directText);
+    if (textNode && !processedNodes.has(textNode)) {
+      processedNodes.add(textNode);
+      processedTexts.add(directText);
       
       blocks.push({
-        element: parent,
-        textNode: node,
-        text: text
+        element: el,
+        textNode: textNode,
+        text: directText
       });
+    }
+  });
+  
+  // 额外处理带有 title 和 aria-label 属性的元素（这些通常是悬浮提示）
+  // 这里我们跳过，因为修改这些属性会比较复杂
+}
+
+/**
+ * 扫描 Shadow DOM
+ */
+function collectShadowDOMTexts(root, blocks, processedNodes, processedTexts) {
+  const elements = root.querySelectorAll('*');
+  
+  elements.forEach(el => {
+    if (el.shadowRoot) {
+      collectTextNodes(el.shadowRoot, blocks, processedNodes, processedTexts);
+      collectElementTexts(el.shadowRoot, blocks, processedNodes, processedTexts);
+    }
+  });
+}
+
+/**
+ * 获取元素的直接文本内容（不包含子元素）
+ */
+function getDirectTextContent(element) {
+  let text = '';
+  
+  for (const child of element.childNodes) {
+    if (child.nodeType === Node.TEXT_NODE) {
+      text += child.textContent;
     }
   }
   
-  return blocks;
+  return text.trim();
+}
+
+/**
+ * 在元素中找到包含指定文本的文本节点
+ */
+function findTextNode(element, targetText) {
+  for (const child of element.childNodes) {
+    if (child.nodeType === Node.TEXT_NODE) {
+      if (child.textContent.trim() === targetText || 
+          child.textContent.includes(targetText.substring(0, 20))) {
+        return child;
+      }
+    }
+  }
+  return null;
 }
 
 /**
@@ -819,9 +990,9 @@ async function handleFabClick() {
   // 如果正在翻译，停止
   if (state.isActive) {
     stopTranslation();
-    fabBtn.classList.remove('translating');
-    fabBtn.classList.remove('completed');
-    tooltip.textContent = '翻译页面';
+    resetFabToIdle();
+    // 通知 popup 状态变化
+    broadcastState('stopped');
     return;
   }
   
@@ -841,9 +1012,24 @@ async function handleFabClick() {
   }
   
   // 开始翻译
+  setFabToTranslating();
+  
+  startTranslation(config);
+  
+  // 通知 popup 状态变化
+  broadcastState('translating');
+}
+
+// 设置悬浮按钮为翻译中状态
+function setFabToTranslating() {
+  if (!fab) return;
+  
+  const fabBtn = fab.querySelector('.oit-fab-btn');
+  const tooltip = fab.querySelector('.oit-fab-tooltip');
+  
   fabBtn.classList.add('translating');
   fabBtn.classList.remove('completed');
-  tooltip.textContent = '翻译中...';
+  tooltip.textContent = '点击停止';
   fab.classList.remove('mini');
   
   // 更新按钮图标为加载状态
@@ -852,8 +1038,6 @@ async function handleFabClick() {
       <path d="M12 4V2A10 10 0 0 0 2 12h2a8 8 0 0 1 8-8z" fill="currentColor"/>
     </svg>
   `;
-  
-  startTranslation(config);
 }
 
 // 隐藏悬浮按钮

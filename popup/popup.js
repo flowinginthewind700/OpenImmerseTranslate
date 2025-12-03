@@ -81,6 +81,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   applyI18n();
   initEventListeners();
   updateUI();
+  // 检查当前翻译状态（与悬浮按钮同步）
+  await checkCurrentTranslationState();
 });
 
 // 应用国际化
@@ -397,9 +399,15 @@ async function injectContentScript(tabId) {
   }
 }
 
-// 处理翻译页面
+// 处理翻译页面（切换开关）
 async function handleTranslatePage() {
   const t = window.i18n.t;
+  
+  // 如果正在翻译，则停止
+  if (isTranslating) {
+    await handleStopTranslate();
+    return;
+  }
   
   if (!currentConfig.apiKey) {
     showToast(t('pleaseConfigureApi'), 'error');
@@ -421,10 +429,7 @@ async function handleTranslatePage() {
       return;
     }
     
-    updateStatus('working', t('translating'), t('translatingDesc'));
-    elements.translatePageBtn.style.display = 'none';
-    elements.stopTranslateBtn.style.display = 'flex';
-    isTranslating = true;
+    setTranslatingState(true);
     
     let scriptLoaded = await checkContentScript(tab.id);
     
@@ -459,7 +464,34 @@ async function handleTranslatePage() {
     
     showToast(errorMsg, 'error');
     updateStatus('error', t('translateError'), errorMsg);
-    resetTranslateButton();
+    setTranslatingState(false);
+  }
+}
+
+// 设置翻译状态
+function setTranslatingState(translating) {
+  const t = window.i18n.t;
+  isTranslating = translating;
+  
+  if (translating) {
+    updateStatus('working', t('translating'), t('translatingDesc'));
+    // 更新按钮为"停止翻译"状态
+    elements.translatePageBtn.innerHTML = `
+      <svg viewBox="0 0 24 24" fill="none">
+        <rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor"/>
+      </svg>
+      <span data-i18n="stopTranslate">${t('stopTranslate')}</span>
+    `;
+    elements.translatePageBtn.classList.add('translating');
+  } else {
+    // 恢复按钮为"开始翻译"状态
+    elements.translatePageBtn.innerHTML = `
+      <svg viewBox="0 0 24 24" fill="none">
+        <path d="M12.87 15.07l-2.54-2.51.03-.03A17.52 17.52 0 0014.07 6H17V4h-7V2H8v2H1v2h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11.76-2.04zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2l-4.5-12zm-2.62 7l1.62-4.33L19.12 17h-3.24z" fill="currentColor"/>
+      </svg>
+      <span data-i18n="translatePage">${t('translatePage')}</span>
+    `;
+    elements.translatePageBtn.classList.remove('translating');
   }
 }
 
@@ -476,20 +508,18 @@ async function handleStopTranslate() {
       } catch (e) {}
     }
     
-    resetTranslateButton();
+    setTranslatingState(false);
     updateStatus('idle', t('stopped'), t('stoppedDesc'));
     
   } catch (error) {
     console.error('Stop error:', error);
-    resetTranslateButton();
+    setTranslatingState(false);
   }
 }
 
-// 重置翻译按钮状态
+// 重置翻译按钮状态（保持向后兼容）
 function resetTranslateButton() {
-  elements.translatePageBtn.style.display = 'flex';
-  elements.stopTranslateBtn.style.display = 'none';
-  isTranslating = false;
+  setTranslatingState(false);
 }
 
 // 更新状态显示
@@ -594,13 +624,36 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const t = window.i18n.t;
   
   if (message.action === 'translationComplete') {
-    resetTranslateButton();
+    setTranslatingState(false);
     updateStatus('success', t('translateComplete'), `${message.count || 0} segments`);
   } else if (message.action === 'translationError') {
-    resetTranslateButton();
+    setTranslatingState(false);
     updateStatus('error', t('translateError'), message.error || '');
     showToast(message.error || t('translateError'), 'error');
   } else if (message.action === 'translationProgress') {
     updateStatus('working', t('translating'), `${message.current}/${message.total}`);
+  } else if (message.action === 'translationStateChanged') {
+    // 同步悬浮按钮触发的状态变化
+    if (message.status === 'translating') {
+      setTranslatingState(true);
+    } else if (message.status === 'stopped') {
+      setTranslatingState(false);
+      updateStatus('idle', t('stopped'), t('stoppedDesc'));
+    }
   }
 });
+
+// 初始化时检查当前翻译状态
+async function checkCurrentTranslationState() {
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (tab?.id) {
+      const response = await chrome.tabs.sendMessage(tab.id, { action: 'getTranslationState' });
+      if (response?.isTranslating) {
+        setTranslatingState(true);
+      }
+    }
+  } catch (e) {
+    // 内容脚本可能未加载，忽略
+  }
+}
