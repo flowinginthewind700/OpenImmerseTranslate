@@ -73,7 +73,7 @@
 
 ```bash
 # 1. 克隆仓库
-git clone https://github.com/your-username/OpenImmerseTranslate.git
+git clone https://github.com/flowinginthewind700/OpenImmerseTranslate.git
 cd OpenImmerseTranslate
 
 # 2. 构建（可选）
@@ -90,7 +90,7 @@ npm run build
 
 #### 方式二：下载 Release
 
-1. 前往 [Releases](https://github.com/your-username/OpenImmerseTranslate/releases) 页面
+1. 前往 [Releases](https://github.com/flowinginthewind700/OpenImmerseTranslate/releases) 页面
 2. 下载最新版本的 `OpenImmerseTranslate-vX.X.X.zip`
 3. 解压后按上述步骤加载
 
@@ -296,7 +296,7 @@ npm run icons
 
 - 🐦 **Twitter**: [@McQueenFu](https://x.com/McQueenFu)
 - 💼 **LinkedIn**: [McQueenFu](https://www.linkedin.com/in/mcqueenfu/)
-- 📝 **GitHub Issues**: [提交 Issue](https://github.com/user/OpenImmerseTranslate/issues)
+- 📝 **GitHub Issues**: [提交 Issue](https://github.com/flowinginthewind700/OpenImmerseTranslate/issues)
 
 ---
 

@@ -8,7 +8,7 @@ Thank you for your interest in contributing to Open Immerse Translate!
 
 ### 报告 Bug | Report Bugs
 
-1. 搜索 [Issues](https://github.com/your-username/OpenImmerseTranslate/issues) 确认问题未被报告
+1. 搜索 [Issues](https://github.com/flowinginthewind700/OpenImmerseTranslate/issues) 确认问题未被报告
 2. 创建新 Issue，包含：
    - 清晰的标题和描述
    - 复现步骤
