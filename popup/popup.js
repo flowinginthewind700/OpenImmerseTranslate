@@ -761,6 +761,12 @@ function showRestoreButton() {
   }
 }
 
+function hideRestoreButton() {
+  if (elements.restoreBtn) {
+    elements.restoreBtn.style.display = 'none';
+  }
+}
+
 // 更新状态显示
 function updateStatus(type, title, desc) {
   const iconEl = elements.statusCard.querySelector('.status-icon');
@@ -887,9 +893,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       logToConsole(progressMsg, 'progress');
     }
   } else if (message.action === 'translationStateChanged') {
-    // 同步悬浮按钮触发的状态变化
+    // 🔥 同步 FAB 和 popup 之间的状态变化
     if (message.status === 'translating') {
       setTranslatingState(true);
+      updateStatus('working', t('translating'), '');
       logToConsole(t('consoleStarting'), 'info');
     } else if (message.status === 'stopped') {
       setTranslatingState(false);
@@ -898,7 +905,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       // 检查是否有已翻译内容，如果有则显示恢复按钮
       if (message.hasTranslations) {
         showRestoreButton();
+      } else {
+        hideRestoreButton();
       }
+    } else if (message.status === 'idle') {
+      // 恢复原样后的状态
+      setTranslatingState(false);
+      updateStatus('idle', t('ready'), t('readyDesc'));
+      hideRestoreButton();
+      logToConsole(t('consoleRestored') || '已恢复原样', 'info');
     }
   } else if (message.action === 'consoleLog') {
     // 直接从内容脚本发送的日志

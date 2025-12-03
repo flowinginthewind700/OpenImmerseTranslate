@@ -516,6 +516,46 @@ a .oit-translation::after {
   transform: scale(1.1);
 }
 
+/* 待翻译状态 - 虚线下划线提示 */
+.oit-pending {
+  position: relative;
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-decoration-color: rgba(124, 58, 237, 0.5);
+  text-underline-offset: 3px;
+}
+
+/* 深色模式下的待翻译提示 */
+@media (prefers-color-scheme: dark) {
+  .oit-pending {
+    text-decoration-color: rgba(167, 139, 250, 0.5);
+  }
+}
+
+/* Twitter 等深色网站的适配 */
+.oit-pending-dark {
+  text-decoration-color: rgba(167, 139, 250, 0.6) !important;
+}
+
+/* 翻译中状态 - 动画下划线 */
+.oit-translating-text {
+  position: relative;
+  text-decoration: underline;
+  text-decoration-style: wavy;
+  text-decoration-color: rgba(0, 122, 255, 0.6);
+  text-underline-offset: 3px;
+  animation: oit-underline-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes oit-underline-pulse {
+  0%, 100% {
+    text-decoration-color: rgba(0, 122, 255, 0.6);
+  }
+  50% {
+    text-decoration-color: rgba(0, 122, 255, 0.2);
+  }
+}
+
 /* 翻译中的闪烁效果 */
 .oit-translating {
   animation: oit-pulse 1.5s ease-in-out infinite;
