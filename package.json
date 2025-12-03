@@ -1,0 +1,24 @@
+{
+  "name": "open-immerse-translate",
+  "version": "1.0.0",
+  "description": "开源沉浸式翻译Chrome插件 - 支持自定义LLM API的双语对照翻译工具",
+  "private": true,
+  "scripts": {
+    "build": "node scripts/build.js",
+    "icons": "node scripts/generate-icons.js",
+    "dev": "echo '请在Chrome扩展页面(chrome://extensions/)加载本项目文件夹'"
+  },
+  "keywords": [
+    "chrome-extension",
+    "translation",
+    "llm",
+    "openai",
+    "bilingual"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "sharp": "^0.33.0"
+  }
+}
+
