@@ -47,8 +47,8 @@ const PROVIDER_DEFAULTS = {
     hintKey: 'hintZhipu'
   },
   ollama: {
-    endpoint: 'http://localhost:11434/v1/chat/completions',
-    model: 'llama3.2',
+    endpoint: 'http://localhost:11434/api/chat',
+    model: 'qwen3',
     hintKey: 'hintOllama'
   },
   custom: {
@@ -155,6 +155,7 @@ function initElements() {
     // 翻译操作
     translatePageBtn: document.getElementById('translatePageBtn'),
     stopTranslateBtn: document.getElementById('stopTranslateBtn'),
+    restoreBtn: document.getElementById('restoreBtn'),
     
     // 状态显示
     statusCard: document.getElementById('statusCard'),
@@ -187,7 +188,8 @@ function initElements() {
     
     // 控制台
     consoleBody: document.getElementById('consoleBody'),
-    clearConsole: document.getElementById('clearConsole')
+    clearConsole: document.getElementById('clearConsole'),
+    copyConsole: document.getElementById('copyConsole')
   };
 }
 
@@ -239,6 +241,40 @@ function clearConsole() {
       <span class="console-msg">${t('consoleReady')}</span>
     </div>
   `;
+}
+
+/**
+ * 复制控制台内容
+ */
+async function copyConsole() {
+  if (!elements.consoleBody) return;
+  
+  const t = window.i18n.t;
+  
+  // 获取所有日志行的文本
+  const lines = elements.consoleBody.querySelectorAll('.console-line');
+  const text = Array.from(lines).map(line => {
+    const time = line.querySelector('.console-time')?.textContent || '';
+    const msg = line.querySelector('.console-msg')?.textContent || '';
+    return time ? `[${time}] ${msg}` : msg;
+  }).join('\n');
+  
+  try {
+    await navigator.clipboard.writeText(text);
+    
+    // 显示复制成功的视觉反馈
+    if (elements.copyConsole) {
+      elements.copyConsole.classList.add('copied');
+      setTimeout(() => {
+        elements.copyConsole.classList.remove('copied');
+      }, 1000);
+    }
+    
+    showToast(t('logCopied'), 'success');
+  } catch (err) {
+    console.error('复制失败:', err);
+    showToast(t('copyFailed'), 'error');
+  }
 }
 
 /**
@@ -379,6 +415,9 @@ function initEventListeners() {
   // 翻译操作
   elements.translatePageBtn.addEventListener('click', handleTranslatePage);
   elements.stopTranslateBtn.addEventListener('click', handleStopTranslate);
+  if (elements.restoreBtn) {
+    elements.restoreBtn.addEventListener('click', handleRestore);
+  }
   
   // 提供商选择变化
   elements.providerSelect.addEventListener('change', handleProviderChange);
@@ -400,9 +439,12 @@ function initEventListeners() {
   // 保存设置
   elements.saveSettingsBtn.addEventListener('click', handleSaveSettings);
   
-  // 清空控制台
+  // 控制台按钮
   if (elements.clearConsole) {
     elements.clearConsole.addEventListener('click', clearConsole);
+  }
+  if (elements.copyConsole) {
+    elements.copyConsole.addEventListener('click', copyConsole);
   }
 }
 
@@ -680,6 +722,45 @@ function resetTranslateButton() {
   setTranslatingState(false);
 }
 
+// 处理恢复原样
+async function handleRestore() {
+  const t = window.i18n.t;
+  
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    
+    if (tab?.id) {
+      try {
+        await chrome.tabs.sendMessage(tab.id, { action: 'removeTranslations' });
+        
+        // 隐藏恢复按钮
+        if (elements.restoreBtn) {
+          elements.restoreBtn.style.display = 'none';
+        }
+        
+        updateStatus('idle', t('restored'), t('restoredDesc'));
+        logToConsole(t('consoleRestored'), 'success');
+        showToast(t('restored'), 'success');
+        
+      } catch (e) {
+        console.error('Restore error:', e);
+        showToast(t('pleaseRefreshPage'), 'error');
+      }
+    }
+    
+  } catch (error) {
+    console.error('Restore error:', error);
+    showToast(t('restoreFailed'), 'error');
+  }
+}
+
+// 显示恢复按钮
+function showRestoreButton() {
+  if (elements.restoreBtn) {
+    elements.restoreBtn.style.display = 'flex';
+  }
+}
+
 // 更新状态显示
 function updateStatus(type, title, desc) {
   const iconEl = elements.statusCard.querySelector('.status-icon');
@@ -788,6 +869,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     updateStatus('success', t('translateComplete'), `${message.count || 0} segments`);
     const completeMsg = t('consoleCompleted').replace('{count}', message.count || 0);
     logToConsole(completeMsg, 'success');
+    // 显示恢复按钮
+    showRestoreButton();
   } else if (message.action === 'translationError') {
     setTranslatingState(false);
     updateStatus('error', t('translateError'), message.error || '');
@@ -812,6 +895,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       setTranslatingState(false);
       updateStatus('idle', t('stopped'), t('stoppedDesc'));
       logToConsole(t('consoleStopped'), 'warning');
+      // 检查是否有已翻译内容，如果有则显示恢复按钮
+      if (message.hasTranslations) {
+        showRestoreButton();
+      }
     }
   } else if (message.action === 'consoleLog') {
     // 直接从内容脚本发送的日志
@@ -825,8 +912,20 @@ async function checkCurrentTranslationState() {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (tab?.id) {
       const response = await chrome.tabs.sendMessage(tab.id, { action: 'getTranslationState' });
-      if (response?.isTranslating) {
-        setTranslatingState(true);
+      if (response) {
+        // 如果正在翻译，更新状态
+        if (response.isTranslating) {
+          setTranslatingState(true);
+        }
+        // 如果页面有已翻译的内容，显示恢复按钮
+        if (response.hasTranslations) {
+          showRestoreButton();
+          // 如果不在翻译中但有翻译内容，说明翻译已完成
+          if (!response.isTranslating) {
+            const t = window.i18n.t;
+            updateStatus('success', t('translateComplete'), `${response.translatedCount || 0} segments`);
+          }
+        }
       }
     }
   } catch (e) {

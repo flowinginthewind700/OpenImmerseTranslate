@@ -8,6 +8,11 @@ const LANGUAGES = {
     appName: 'Open Immerse',
     translatePage: '翻译当前页面',
     stopTranslate: '停止翻译',
+    restore: '恢复原样',
+    restored: '已恢复',
+    restoredDesc: '页面已恢复原样',
+    restoreFailed: '恢复失败',
+    consoleRestored: '✓ 页面已恢复原样',
     ready: '就绪',
     readyDesc: '点击上方按钮开始翻译',
     translating: '翻译中...',
@@ -59,7 +64,7 @@ const LANGUAGES = {
     hintMoonshot: 'Moonshot Kimi，月之暗面出品',
     hintZhipu: '智谱 GLM，清华系大模型',
     hintAnthropic: '使用 Anthropic Claude API',
-    hintOllama: '本地运行 Ollama，无需 API Key，默认端口 11434',
+    hintOllama: '本地运行 Ollama，无需 API Key。首次使用请在终端运行: OLLAMA_ORIGINS=* ollama serve',
     hintCustom: '填入任意 OpenAI 兼容的 API 地址和密钥',
     
     // 翻译设置
@@ -92,6 +97,10 @@ const LANGUAGES = {
     
     // 控制台
     console: '控制台',
+    copyLog: '复制日志',
+    clearLog: '清空日志',
+    logCopied: '日志已复制到剪贴板',
+    copyFailed: '复制失败',
     consoleReady: '准备就绪，点击翻译开始',
     consoleStarting: '开始翻译页面...',
     consoleCollecting: '正在收集页面文本...',
@@ -121,6 +130,11 @@ const LANGUAGES = {
     appName: 'Open Immerse',
     translatePage: 'Translate Page',
     stopTranslate: 'Stop',
+    restore: 'Restore',
+    restored: 'Restored',
+    restoredDesc: 'Page restored to original',
+    restoreFailed: 'Restore failed',
+    consoleRestored: '✓ Page restored to original',
     ready: 'Ready',
     readyDesc: 'Click button above to start',
     translating: 'Translating...',
@@ -172,7 +186,7 @@ const LANGUAGES = {
     hintMoonshot: 'Moonshot Kimi by Moonshot AI',
     hintZhipu: 'Zhipu GLM, Tsinghua AI model',
     hintAnthropic: 'Use Anthropic Claude API',
-    hintOllama: 'Run locally with Ollama, no API key needed, default port 11434',
+    hintOllama: 'Run locally with Ollama, no API key needed. First time: run "OLLAMA_ORIGINS=* ollama serve" in terminal',
     hintCustom: 'Enter any OpenAI compatible API',
     
     // Translation settings
@@ -205,6 +219,10 @@ const LANGUAGES = {
     
     // Console
     console: 'Console',
+    copyLog: 'Copy Log',
+    clearLog: 'Clear Log',
+    logCopied: 'Log copied to clipboard',
+    copyFailed: 'Copy failed',
     consoleReady: 'Ready. Click translate to start',
     consoleStarting: 'Starting page translation...',
     consoleCollecting: 'Collecting page text...',

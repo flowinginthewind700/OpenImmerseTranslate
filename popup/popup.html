@@ -66,6 +66,12 @@
           </svg>
           <span data-i18n="stopTranslate">停止翻译</span>
         </button>
+        <button class="action-btn tertiary" id="restoreBtn" style="display: none;">
+          <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M12.5 8c-2.65 0-5.05.99-6.9 2.6L2 7v9h9l-3.62-3.62c1.39-1.16 3.16-1.88 5.12-1.88 3.54 0 6.55 2.31 7.6 5.5l2.37-.78C21.08 11.03 17.15 8 12.5 8z" fill="currentColor"/>
+          </svg>
+          <span data-i18n="restore">恢复原样</span>
+        </button>
       </section>
 
       <!-- 状态显示 -->
@@ -114,11 +120,18 @@
             </svg>
             <span data-i18n="console">控制台</span>
           </span>
-          <button class="console-clear" id="clearConsole" title="清除">
-            <svg viewBox="0 0 24 24" fill="none" width="12" height="12">
-              <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" fill="currentColor"/>
-            </svg>
-          </button>
+          <div class="console-actions">
+            <button class="console-btn" id="copyConsole" data-i18n-title="copyLog">
+              <svg viewBox="0 0 24 24" fill="none" width="12" height="12">
+                <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z" fill="currentColor"/>
+              </svg>
+            </button>
+            <button class="console-btn" id="clearConsole" data-i18n-title="clearLog">
+              <svg viewBox="0 0 24 24" fill="none" width="12" height="12">
+                <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" fill="currentColor"/>
+              </svg>
+            </button>
+          </div>
         </div>
         <div class="console-body" id="consoleBody">
           <div class="console-line info">

@@ -132,6 +132,8 @@ async function handleTranslate(texts, config) {
       switch (config.provider) {
         case 'anthropic':
           return await callAnthropicApi(systemPrompt, userPrompt, config);
+        case 'ollama':
+          return await callOllamaApi(systemPrompt, userPrompt, config);
         default:
           return await callOpenAICompatibleApi(systemPrompt, userPrompt, config);
       }
@@ -222,6 +224,70 @@ async function callOpenAICompatibleApi(systemPrompt, userPrompt, config) {
   return parseTranslations(content);
 }
 
+// Ollama 原生 API 调用
+async function callOllamaApi(systemPrompt, userPrompt, config) {
+  // Ollama 原生 API 端点是 /api/chat
+  let endpoint = config.apiEndpoint;
+  
+  // 自动修正端点
+  if (endpoint.includes('/v1/chat/completions')) {
+    endpoint = endpoint.replace('/v1/chat/completions', '/api/chat');
+  } else if (!endpoint.includes('/api/')) {
+    endpoint = endpoint.replace(/\/$/, '') + '/api/chat';
+  }
+  
+  console.log('[OpenImmerseTranslate] Ollama endpoint:', endpoint);
+  
+  const requestBody = {
+    model: config.modelName,
+    messages: [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: userPrompt }
+    ],
+    stream: false,
+    options: {
+      temperature: config.temperature || 0.3
+    }
+  };
+  
+  console.log('[OpenImmerseTranslate] Ollama request:', JSON.stringify(requestBody).substring(0, 200));
+  
+  // Chrome 扩展的 service worker 可以发起跨域请求
+  // 但需要确保 host_permissions 包含目标域
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json'
+    },
+    body: JSON.stringify(requestBody)
+  });
+  
+  console.log('[OpenImmerseTranslate] Ollama response status:', response.status);
+  
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => '');
+    console.error('[OpenImmerseTranslate] Ollama error:', response.status, errorText);
+    
+    if (response.status === 403) {
+      // 提供更友好的错误信息和解决方案
+      throw new Error('Ollama 连接被拒绝。请在终端运行: OLLAMA_ORIGINS=* ollama serve');
+    }
+    if (response.status === 404) {
+      throw new Error(`模型 "${config.modelName}" 未找到，请先运行: ollama pull ${config.modelName}`);
+    }
+    
+    throw new Error(`Ollama 错误: ${response.status} - ${errorText}`);
+  }
+  
+  const data = await response.json();
+  const content = data.message?.content || '';
+  
+  console.log('[OpenImmerseTranslate] Ollama response content:', content.substring(0, 100));
+  
+  return parseTranslations(content);
+}
+
 async function callAnthropicApi(systemPrompt, userPrompt, config) {
   const response = await fetch(config.apiEndpoint, {
     method: 'POST',
@@ -271,6 +337,9 @@ async function handleTestApi(config) {
       switch (config.provider) {
         case 'anthropic':
           await callAnthropicApi(`翻译成${targetLang}`, testPrompt, config);
+          break;
+        case 'ollama':
+          await callOllamaApi(`翻译成${targetLang}`, testPrompt, config);
           break;
         default:
           await callOpenAICompatibleApi(`翻译成${targetLang}`, testPrompt, config);

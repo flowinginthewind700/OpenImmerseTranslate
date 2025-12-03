@@ -121,9 +121,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       break;
     case 'getTranslationState':
       // 返回当前翻译状态，用于popup同步
+      // 检查页面是否有已翻译的内容
+      const hasTranslations = document.querySelectorAll('.oit-wrapper').length > 0;
       sendResponse({ 
         isTranslating: state.isActive,
-        translatedCount: state.translatedCount
+        translatedCount: state.translatedCount,
+        hasTranslations: hasTranslations
       });
       break;
     default:
@@ -135,10 +138,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 // 广播翻译状态变化
 function broadcastState(status) {
   try {
+    // 检查页面是否有已翻译的内容
+    const hasTranslations = document.querySelectorAll('.oit-wrapper').length > 0;
     chrome.runtime.sendMessage({
       action: 'translationStateChanged',
       status: status,
-      isTranslating: state.isActive
+      isTranslating: state.isActive,
+      hasTranslations: hasTranslations,
+      translatedCount: state.translatedCount
     });
   } catch (e) {
     // popup 可能已关闭，忽略错误
@@ -917,11 +924,17 @@ function removeAllTranslations() {
 // ==================== 通知函数 ====================
 
 function notifyComplete() {
+  const hasTranslations = document.querySelectorAll('.oit-wrapper').length > 0;
   chrome.runtime.sendMessage({
     action: 'translationComplete',
-    count: state.translatedCount
+    count: state.translatedCount,
+    hasTranslations: hasTranslations
   });
   state.isActive = false;
+  // 更新 FAB 状态
+  if (typeof updateFabStatus === 'function') {
+    updateFabStatus('completed');
+  }
 }
 
 function notifyError(error) {
@@ -929,6 +942,10 @@ function notifyError(error) {
     action: 'translationError',
     error: error
   });
+  // 更新 FAB 状态
+  if (typeof updateFabStatus === 'function') {
+    updateFabStatus('error');
+  }
 }
 
 function notifyProgress(current, total) {
@@ -1367,19 +1384,6 @@ function updateFabStatus(status) {
 }
 
 // 修改通知完成函数
-const originalNotifyComplete = notifyComplete;
-function notifyComplete() {
-  originalNotifyComplete();
-  updateFabStatus('completed');
-}
-
-// 修改通知错误函数
-const originalNotifyError = notifyError;
-function notifyError(error) {
-  originalNotifyError(error);
-  updateFabStatus('error');
-}
-
 // 页面加载完成后初始化
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', () => {
