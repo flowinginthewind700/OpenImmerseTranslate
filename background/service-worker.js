@@ -186,12 +186,19 @@ function buildUserPrompt(texts, config) {
 
 // ==================== API 调用 ====================
 async function callOpenAICompatibleApi(systemPrompt, userPrompt, config) {
+  // 构建请求头，Ollama 不需要 API Key
+  const headers = {
+    'Content-Type': 'application/json'
+  };
+  
+  // 只有在有 API Key 时才添加 Authorization 头
+  if (config.apiKey && config.apiKey.trim()) {
+    headers['Authorization'] = `Bearer ${config.apiKey}`;
+  }
+  
   const response = await fetch(config.apiEndpoint, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${config.apiKey}`
-    },
+    headers: headers,
     body: JSON.stringify({
       model: config.modelName,
       messages: [

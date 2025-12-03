@@ -137,6 +137,7 @@ npm run build
 | **DeepSeek** | `https://api.deepseek.com/v1/chat/completions` | `deepseek-chat` |
 | **Moonshot** | `https://api.moonshot.cn/v1/chat/completions` | `moonshot-v1-8k` |
 | **智谱 GLM** | `https://open.bigmodel.cn/api/paas/v4/chat/completions` | `glm-4-flash` |
+| **Ollama** | `http://localhost:11434/v1/chat/completions` | `llama3.2` |
 | **自定义** | 任意 OpenAI 兼容 API | - |
 
 ### 自定义 API

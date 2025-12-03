@@ -46,6 +46,11 @@ const PROVIDER_DEFAULTS = {
     model: 'glm-4-flash',
     hintKey: 'hintZhipu'
   },
+  ollama: {
+    endpoint: 'http://localhost:11434/v1/chat/completions',
+    model: 'llama3.2',
+    hintKey: 'hintOllama'
+  },
   custom: {
     endpoint: '',
     model: '',
@@ -436,11 +441,9 @@ function updateUI() {
 // 更新引导显示
 function updateSetupGuide() {
   if (elements.setupGuide) {
-    if (!currentConfig.apiKey) {
-      elements.setupGuide.style.display = 'block';
-    } else {
-      elements.setupGuide.style.display = 'none';
-    }
+    // Ollama 不需要 API Key
+    const needsSetup = !currentConfig.apiKey && currentConfig.provider !== 'ollama';
+    elements.setupGuide.style.display = needsSetup ? 'block' : 'none';
   }
 }
 
@@ -458,7 +461,10 @@ function updateApiStatus() {
   const statusEl = elements.apiStatus;
   const itemEl = elements.apiStatusItem;
   
-  if (currentConfig.apiKey) {
+  // Ollama 不需要 API Key，视为已配置
+  const isConfigured = currentConfig.apiKey || currentConfig.provider === 'ollama';
+  
+  if (isConfigured) {
     statusEl.innerHTML = `<span class="status-dot active"></span><span>${t('configured')}</span>`;
     itemEl.classList.remove('not-configured', 'clickable');
   } else {
@@ -475,6 +481,7 @@ function getProviderName(provider) {
     deepseek: 'DeepSeek',
     moonshot: 'Kimi',
     zhipu: '智谱GLM',
+    ollama: 'Ollama',
     custom: window.i18n.t('providerCustom')
   };
   return names[provider] || provider;
@@ -550,7 +557,9 @@ async function handleTranslatePage() {
     return;
   }
   
-  if (!currentConfig.apiKey) {
+  // Ollama 不需要 API Key，其他提供商需要
+  const needsApiKey = currentConfig.provider !== 'ollama';
+  if (needsApiKey && !currentConfig.apiKey) {
     showToast(t('pleaseConfigureApi'), 'error');
     logToConsole(t('errorApiKeyMissing'), 'error');
     showPanel('settings');
@@ -699,7 +708,9 @@ async function handleTestApi() {
   const model = elements.modelName.value.trim();
   const provider = elements.providerSelect.value;
   
-  if (!endpoint || !apiKey) {
+  // Ollama 不需要 API Key
+  const needsApiKey = provider !== 'ollama';
+  if (!endpoint || (needsApiKey && !apiKey)) {
     showToast(t('fillApiAndKey'), 'error');
     return;
   }

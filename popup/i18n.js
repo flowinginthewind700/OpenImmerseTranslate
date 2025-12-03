@@ -50,6 +50,7 @@ const LANGUAGES = {
     providerMoonshot: 'Moonshot Kimi',
     providerZhipu: '智谱 GLM',
     providerAnthropic: 'Anthropic Claude',
+    providerOllama: 'Ollama (本地运行)',
     providerCustom: '自定义 OpenAI 兼容 API',
     
     // 提供商提示
@@ -58,6 +59,7 @@ const LANGUAGES = {
     hintMoonshot: 'Moonshot Kimi，月之暗面出品',
     hintZhipu: '智谱 GLM，清华系大模型',
     hintAnthropic: '使用 Anthropic Claude API',
+    hintOllama: '本地运行 Ollama，无需 API Key，默认端口 11434',
     hintCustom: '填入任意 OpenAI 兼容的 API 地址和密钥',
     
     // 翻译设置
@@ -161,6 +163,7 @@ const LANGUAGES = {
     providerMoonshot: 'Moonshot Kimi',
     providerZhipu: 'Zhipu GLM',
     providerAnthropic: 'Anthropic Claude',
+    providerOllama: 'Ollama (Local)',
     providerCustom: 'Custom OpenAI Compatible API',
     
     // Provider hints
@@ -169,6 +172,7 @@ const LANGUAGES = {
     hintMoonshot: 'Moonshot Kimi by Moonshot AI',
     hintZhipu: 'Zhipu GLM, Tsinghua AI model',
     hintAnthropic: 'Use Anthropic Claude API',
+    hintOllama: 'Run locally with Ollama, no API key needed, default port 11434',
     hintCustom: 'Enter any OpenAI compatible API',
     
     // Translation settings
