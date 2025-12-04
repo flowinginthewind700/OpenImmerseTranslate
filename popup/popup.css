@@ -1126,6 +1126,58 @@ body {
   box-shadow: 0 0 0 3px rgba(52, 199, 89, 0.2);
 }
 
+/* Mini Toggle - 主界面用 */
+.fab-toggle-item {
+  border-top: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+.toggle-switch-mini {
+  position: relative;
+  display: inline-block;
+  width: 40px;
+  height: 24px;
+  flex-shrink: 0;
+}
+
+.toggle-switch-mini input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.toggle-slider-mini {
+  position: absolute;
+  cursor: pointer;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: var(--gray-300);
+  transition: all 0.25s ease;
+  border-radius: 24px;
+}
+
+.toggle-slider-mini::before {
+  position: absolute;
+  content: "";
+  height: 20px;
+  width: 20px;
+  left: 2px;
+  bottom: 2px;
+  background-color: white;
+  transition: all 0.25s ease;
+  border-radius: 50%;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+.toggle-switch-mini input:checked + .toggle-slider-mini {
+  background: linear-gradient(145deg, #34C759 0%, #30D158 100%);
+}
+
+.toggle-switch-mini input:checked + .toggle-slider-mini::before {
+  transform: translateX(16px);
+}
+
 /* Range滑块 - 苹果风格 */
 .range-container {
   display: flex;

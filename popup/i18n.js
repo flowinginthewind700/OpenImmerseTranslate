@@ -82,6 +82,7 @@ const LANGUAGES = {
     autoDetect: '智能跳过目标语言内容',
     
     // 界面设置
+    floatingButton: '悬浮按钮',
     uiSettings: '🎨 界面设置',
     showFab: '显示悬浮翻译按钮',
     showFabDesc: '在页面右侧显示快捷翻译按钮',
@@ -213,6 +214,7 @@ const LANGUAGES = {
     autoDetect: 'Skip target language content',
     
     // UI settings
+    floatingButton: 'Float Button',
     uiSettings: '🎨 Interface Settings',
     showFab: 'Show floating translate button',
     showFabDesc: 'Show quick translate button on page side',

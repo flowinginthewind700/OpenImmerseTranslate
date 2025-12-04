@@ -3,9 +3,9 @@
  * 弹出窗口的交互逻辑 + 国际化支持
  */
 
-// 默认配置
+// 默认配置 - 默认使用 Google 翻译（免费），推荐 DeepSeek
 const DEFAULT_CONFIG = {
-  provider: 'google',  // 默认使用 Google 翻译（免费），推荐升级到 DeepSeek
+  provider: 'google',  // 默认 Google 翻译，免费无需配置
   apiEndpoint: '',
   apiKey: '',
   modelName: '',
@@ -198,7 +198,9 @@ function initElements() {
     translationStyle: document.getElementById('translationStyle'),
     showOriginal: document.getElementById('showOriginal'),
     autoDetect: document.getElementById('autoDetect'),
-    showFab: document.getElementById('showFab'),
+    
+    // 主界面的 FAB 开关
+    fabToggle: document.getElementById('fabToggle'),
     
     customPrompt: document.getElementById('customPrompt'),
     maxTokens: document.getElementById('maxTokens'),
@@ -468,6 +470,11 @@ function initEventListeners() {
   if (elements.copyConsole) {
     elements.copyConsole.addEventListener('click', copyConsole);
   }
+  
+  // FAB 开关（主界面）
+  if (elements.fabToggle) {
+    elements.fabToggle.addEventListener('change', handleFabToggle);
+  }
 }
 
 // 更新UI
@@ -486,8 +493,9 @@ function updateUI() {
   elements.translationStyle.value = currentConfig.translationStyle;
   elements.showOriginal.checked = currentConfig.showOriginal;
   elements.autoDetect.checked = currentConfig.autoDetect;
-  if (elements.showFab) {
-    elements.showFab.checked = currentConfig.showFab !== false;
+  // 更新主界面的 FAB 开关
+  if (elements.fabToggle) {
+    elements.fabToggle.checked = currentConfig.showFab !== false;
   }
   elements.customPrompt.value = currentConfig.customPrompt;
   elements.maxTokens.value = currentConfig.maxTokens;
@@ -900,9 +908,6 @@ async function handleTestApi() {
 
 // 处理保存设置
 async function handleSaveSettings() {
-  const newShowFab = elements.showFab ? elements.showFab.checked : true;
-  const oldShowFab = currentConfig.showFab;
-  
   currentConfig = {
     ...currentConfig,
     provider: elements.providerSelect.value,
@@ -914,7 +919,6 @@ async function handleSaveSettings() {
     translationStyle: elements.translationStyle.value,
     showOriginal: elements.showOriginal.checked,
     autoDetect: elements.autoDetect.checked,
-    showFab: newShowFab,
     customPrompt: elements.customPrompt.value.trim(),
     maxTokens: parseInt(elements.maxTokens.value) || 2048,
     temperature: parseFloat(elements.temperature.value) || 0.3
@@ -922,19 +926,25 @@ async function handleSaveSettings() {
   
   await saveConfig();
   updateUI();
+}
+
+// 处理 FAB 开关切换（主界面）
+async function handleFabToggle() {
+  const newShowFab = elements.fabToggle.checked;
+  currentConfig.showFab = newShowFab;
   
-  // 如果 FAB 设置改变，通知内容脚本
-  if (newShowFab !== oldShowFab) {
-    try {
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (tab?.id) {
-        chrome.tabs.sendMessage(tab.id, { 
-          action: newShowFab ? 'showFab' : 'hideFab' 
-        });
-      }
-    } catch (e) {
-      // 忽略错误
+  await saveConfig();
+  
+  // 通知内容脚本
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (tab?.id) {
+      chrome.tabs.sendMessage(tab.id, { 
+        action: newShowFab ? 'showFab' : 'hideFab' 
+      });
     }
+  } catch (e) {
+    // 忽略错误
   }
 }
 

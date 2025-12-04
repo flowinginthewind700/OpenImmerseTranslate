@@ -1637,14 +1637,15 @@ function hideFAB() {
     fab.remove();
     fab = null;
   }
-  // 记住隐藏状态
-  chrome.storage.local.set({ fabHidden: true });
+  console.log('[OIT] FAB hidden');
 }
 
 // 显示悬浮按钮
 function showFAB() {
-  chrome.storage.local.set({ fabHidden: false });
-  initFAB();
+  if (!fab) {
+    initFAB();
+    console.log('[OIT] FAB shown');
+  }
 }
 
 // 更新悬浮按钮状态
@@ -1705,31 +1706,35 @@ function updateFabStatus(status) {
 // 检查是否应该显示 FAB
 async function shouldShowFab() {
   try {
-    // 先检查用户设置（sync storage 中的 config.showFab）
+    // 检查用户设置（sync storage 中的 config.showFab）
     const syncResult = await chrome.storage.sync.get('config');
+    // 如果没有配置或者 showFab 不是 false，则显示（默认显示）
     if (syncResult.config && syncResult.config.showFab === false) {
       return false;
     }
-    
-    // 再检查本地临时隐藏状态
-    const localResult = await chrome.storage.local.get('fabHidden');
-    return !localResult.fabHidden;
+    return true;
   } catch (e) {
+    console.log('[OIT] Error checking FAB setting:', e);
     return true; // 默认显示
+  }
+}
+
+// 初始化 FAB
+async function initFabOnLoad() {
+  // 等待一小段时间确保 DOM 完全加载
+  await new Promise(resolve => setTimeout(resolve, 100));
+  
+  if (await shouldShowFab()) {
+    console.log('[OIT] Initializing FAB');
+    initFAB();
+  } else {
+    console.log('[OIT] FAB disabled by user setting');
   }
 }
 
 // 页面加载完成后初始化
 if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', async () => {
-    if (await shouldShowFab()) {
-      initFAB();
-    }
-  });
+  document.addEventListener('DOMContentLoaded', initFabOnLoad);
 } else {
-  (async () => {
-    if (await shouldShowFab()) {
-      initFAB();
-    }
-  })();
+  initFabOnLoad();
 }

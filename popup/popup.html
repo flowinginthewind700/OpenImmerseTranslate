@@ -95,7 +95,7 @@
         <div class="config-list">
           <div class="config-item">
             <span class="config-label" data-i18n="translationService">翻译服务</span>
-            <span class="config-value" id="currentProvider">OpenAI</span>
+            <span class="config-value" id="currentProvider">Google</span>
           </div>
           <div class="config-item">
             <span class="config-label" data-i18n="targetLanguage">目标语言</span>
@@ -107,6 +107,13 @@
               <span class="status-dot"></span>
               <span data-i18n="notConfigured">未配置</span>
             </span>
+          </div>
+          <div class="config-item fab-toggle-item">
+            <span class="config-label" data-i18n="floatingButton">悬浮按钮</span>
+            <label class="toggle-switch-mini">
+              <input type="checkbox" id="fabToggle" checked>
+              <span class="toggle-slider-mini"></span>
+            </label>
           </div>
         </div>
       </section>
@@ -278,21 +285,6 @@
           </div>
         </section>
 
-        <!-- 界面设置 -->
-        <section class="settings-section">
-          <h3 class="section-title" data-i18n="uiSettings">🎨 界面设置</h3>
-          
-          <div class="form-group toggle-group">
-            <div class="toggle-info">
-              <span class="toggle-label" data-i18n="showFab">显示悬浮翻译按钮</span>
-              <span class="toggle-desc" data-i18n="showFabDesc">在页面右侧显示快捷翻译按钮</span>
-            </div>
-            <label class="toggle-switch">
-              <input type="checkbox" id="showFab" checked>
-              <span class="toggle-slider"></span>
-            </label>
-          </div>
-        </section>
 
         <!-- 高级设置 -->
         <section class="settings-section">
