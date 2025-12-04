@@ -50,8 +50,9 @@ const LANGUAGES = {
     connectionFailed: '连接失败',
     
     // 提供商
+    providerDeepSeek: '⭐ DeepSeek (推荐)',
+    providerGoogle: 'Google 翻译 (免费)',
     providerOpenAI: 'OpenAI (GPT-4o)',
-    providerDeepSeek: 'DeepSeek 深度求索',
     providerMoonshot: 'Moonshot Kimi',
     providerZhipu: '智谱 GLM',
     providerAnthropic: 'Anthropic Claude',
@@ -59,8 +60,9 @@ const LANGUAGES = {
     providerCustom: '自定义 OpenAI 兼容 API',
     
     // 提供商提示
+    hintDeepSeek: '⭐ 推荐！DeepSeek 深度求索，高性价比，翻译质量优秀',
+    hintGoogle: '免费使用 Google 翻译，无需 API Key，适合轻度使用',
     hintOpenAI: '使用 OpenAI 官方 API，需要 API Key',
-    hintDeepSeek: 'DeepSeek 深度求索，国产高性价比模型',
     hintMoonshot: 'Moonshot Kimi，月之暗面出品',
     hintZhipu: '智谱 GLM，清华系大模型',
     hintAnthropic: '使用 Anthropic Claude API',
@@ -69,13 +71,20 @@ const LANGUAGES = {
     
     // 翻译设置
     translationSettings: '🌍 翻译设置',
+    sourceLang: '源语言',
+    autoDetectLang: '自动检测',
     targetLang: '目标语言',
     translationStyle: '翻译风格',
     styleAccurate: '准确翻译 - 忠实原文',
     styleFluent: '流畅翻译 - 自然通顺',
     styleCreative: '意译 - 生动地道',
     showOriginal: '显示原文（双语对照）',
-    autoDetect: '自动检测源语言',
+    autoDetect: '智能跳过目标语言内容',
+    
+    // 界面设置
+    uiSettings: '🎨 界面设置',
+    showFab: '显示悬浮翻译按钮',
+    showFabDesc: '在页面右侧显示快捷翻译按钮',
     
     // 高级设置
     advancedSettings: '⚙️ 高级设置',
@@ -172,8 +181,9 @@ const LANGUAGES = {
     connectionFailed: 'Connection failed',
     
     // Providers
+    providerDeepSeek: '⭐ DeepSeek (Recommended)',
+    providerGoogle: 'Google Translate (Free)',
     providerOpenAI: 'OpenAI (GPT-4o)',
-    providerDeepSeek: 'DeepSeek',
     providerMoonshot: 'Moonshot Kimi',
     providerZhipu: 'Zhipu GLM',
     providerAnthropic: 'Anthropic Claude',
@@ -181,8 +191,9 @@ const LANGUAGES = {
     providerCustom: 'Custom OpenAI Compatible API',
     
     // Provider hints
+    hintDeepSeek: '⭐ Recommended! DeepSeek, cost-effective with excellent quality',
+    hintGoogle: 'Free Google Translate, no API key needed, good for light use',
     hintOpenAI: 'Use OpenAI official API',
-    hintDeepSeek: 'DeepSeek, cost-effective Chinese model',
     hintMoonshot: 'Moonshot Kimi by Moonshot AI',
     hintZhipu: 'Zhipu GLM, Tsinghua AI model',
     hintAnthropic: 'Use Anthropic Claude API',
@@ -191,13 +202,20 @@ const LANGUAGES = {
     
     // Translation settings
     translationSettings: '🌍 Translation Settings',
+    sourceLang: 'Source Language',
+    autoDetectLang: 'Auto Detect',
     targetLang: 'Target Language',
     translationStyle: 'Translation Style',
     styleAccurate: 'Accurate - Faithful to original',
     styleFluent: 'Fluent - Natural expression',
     styleCreative: 'Creative - Vivid interpretation',
     showOriginal: 'Show original (Bilingual)',
-    autoDetect: 'Auto-detect source language',
+    autoDetect: 'Skip target language content',
+    
+    // UI settings
+    uiSettings: '🎨 Interface Settings',
+    showFab: 'Show floating translate button',
+    showFabDesc: 'Show quick translate button on page side',
     
     // Advanced settings
     advancedSettings: '⚙️ Advanced Settings',

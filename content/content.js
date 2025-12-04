@@ -154,6 +154,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         hasTranslations: hasTranslations
       });
       break;
+    case 'showFab':
+      // 显示悬浮按钮
+      showFAB();
+      sendResponse({ success: true });
+      break;
+    case 'hideFab':
+      // 隐藏悬浮按钮
+      hideFAB();
+      sendResponse({ success: true });
+      break;
     default:
       sendResponse({ success: false, error: 'Unknown action' });
   }
@@ -1692,20 +1702,34 @@ function updateFabStatus(status) {
   }
 }
 
-// 修改通知完成函数
+// 检查是否应该显示 FAB
+async function shouldShowFab() {
+  try {
+    // 先检查用户设置（sync storage 中的 config.showFab）
+    const syncResult = await chrome.storage.sync.get('config');
+    if (syncResult.config && syncResult.config.showFab === false) {
+      return false;
+    }
+    
+    // 再检查本地临时隐藏状态
+    const localResult = await chrome.storage.local.get('fabHidden');
+    return !localResult.fabHidden;
+  } catch (e) {
+    return true; // 默认显示
+  }
+}
+
 // 页面加载完成后初始化
 if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', () => {
-    chrome.storage.local.get('fabHidden', (result) => {
-      if (!result.fabHidden) {
-        initFAB();
-      }
-    });
-  });
-} else {
-  chrome.storage.local.get('fabHidden', (result) => {
-    if (!result.fabHidden) {
+  document.addEventListener('DOMContentLoaded', async () => {
+    if (await shouldShowFab()) {
       initFAB();
     }
   });
+} else {
+  (async () => {
+    if (await shouldShowFab()) {
+      initFAB();
+    }
+  })();
 }

@@ -5,14 +5,16 @@
 
 // 默认配置
 const DEFAULT_CONFIG = {
-  provider: 'openai',
-  apiEndpoint: 'https://api.openai.com/v1/chat/completions',
+  provider: 'deepseek',
+  apiEndpoint: 'https://api.deepseek.com/v1/chat/completions',
   apiKey: '',
-  modelName: 'gpt-4o-mini',
+  modelName: 'deepseek-chat',
+  sourceLang: 'auto',  // 源语言：auto 自动检测，或指定语言代码
   targetLang: 'zh-CN',
   translationStyle: 'accurate',
   showOriginal: true,
-  autoDetect: true,
+  autoDetect: true,  // 智能跳过目标语言内容
+  showFab: true,     // 显示悬浮翻译按钮
   customPrompt: '',
   maxTokens: 2048,
   temperature: 0.3,
@@ -21,45 +23,59 @@ const DEFAULT_CONFIG = {
 
 // 提供商默认配置
 const PROVIDER_DEFAULTS = {
+  deepseek: {
+    endpoint: 'https://api.deepseek.com/v1/chat/completions',
+    model: 'deepseek-chat',
+    hintKey: 'hintDeepSeek',
+    needsApiKey: true
+  },
+  google: {
+    endpoint: '',  // Google Translate 使用内置接口
+    model: '',
+    hintKey: 'hintGoogle',
+    needsApiKey: false  // 免费，无需 API Key
+  },
   openai: {
     endpoint: 'https://api.openai.com/v1/chat/completions',
     model: 'gpt-4o-mini',
-    hintKey: 'hintOpenAI'
+    hintKey: 'hintOpenAI',
+    needsApiKey: true
   },
   anthropic: {
     endpoint: 'https://api.anthropic.com/v1/messages',
     model: 'claude-3-haiku-20240307',
-    hintKey: 'hintAnthropic'
-  },
-  deepseek: {
-    endpoint: 'https://api.deepseek.com/v1/chat/completions',
-    model: 'deepseek-chat',
-    hintKey: 'hintDeepSeek'
+    hintKey: 'hintAnthropic',
+    needsApiKey: true
   },
   moonshot: {
     endpoint: 'https://api.moonshot.cn/v1/chat/completions',
     model: 'moonshot-v1-8k',
-    hintKey: 'hintMoonshot'
+    hintKey: 'hintMoonshot',
+    needsApiKey: true
   },
   zhipu: {
     endpoint: 'https://open.bigmodel.cn/api/paas/v4/chat/completions',
     model: 'glm-4-flash',
-    hintKey: 'hintZhipu'
+    hintKey: 'hintZhipu',
+    needsApiKey: true
   },
   ollama: {
     endpoint: 'http://localhost:11434/api/chat',
     model: 'qwen3',
-    hintKey: 'hintOllama'
+    hintKey: 'hintOllama',
+    needsApiKey: false
   },
   custom: {
     endpoint: '',
     model: '',
-    hintKey: 'hintCustom'
+    hintKey: 'hintCustom',
+    needsApiKey: true
   }
 };
 
 // 语言名称映射
 const LANG_NAMES = {
+  'auto': '自动检测 / Auto',
   'zh-CN': '简体中文',
   'zh-TW': '繁體中文',
   'en': 'English',
@@ -69,7 +85,11 @@ const LANG_NAMES = {
   'de': 'Deutsch',
   'es': 'Español',
   'ru': 'Русский',
-  'ar': 'العربية'
+  'ar': 'العربية',
+  'pt': 'Português',
+  'it': 'Italiano',
+  'vi': 'Tiếng Việt',
+  'th': 'ไทย'
 };
 
 // DOM 元素
@@ -173,10 +193,12 @@ function initElements() {
     modelName: document.getElementById('modelName'),
     testApiBtn: document.getElementById('testApiBtn'),
     
+    sourceLang: document.getElementById('sourceLang'),
     targetLang: document.getElementById('targetLang'),
     translationStyle: document.getElementById('translationStyle'),
     showOriginal: document.getElementById('showOriginal'),
     autoDetect: document.getElementById('autoDetect'),
+    showFab: document.getElementById('showFab'),
     
     customPrompt: document.getElementById('customPrompt'),
     maxTokens: document.getElementById('maxTokens'),
@@ -457,10 +479,16 @@ function updateUI() {
   elements.apiEndpoint.value = currentConfig.apiEndpoint;
   elements.apiKey.value = currentConfig.apiKey;
   elements.modelName.value = currentConfig.modelName;
+  if (elements.sourceLang) {
+    elements.sourceLang.value = currentConfig.sourceLang || 'auto';
+  }
   elements.targetLang.value = currentConfig.targetLang;
   elements.translationStyle.value = currentConfig.translationStyle;
   elements.showOriginal.checked = currentConfig.showOriginal;
   elements.autoDetect.checked = currentConfig.autoDetect;
+  if (elements.showFab) {
+    elements.showFab.checked = currentConfig.showFab !== false;
+  }
   elements.customPrompt.value = currentConfig.customPrompt;
   elements.maxTokens.value = currentConfig.maxTokens;
   elements.temperature.value = currentConfig.temperature;
@@ -478,13 +506,18 @@ function updateUI() {
   
   // 显示/隐藏引导
   updateSetupGuide();
+  
+  // 根据提供商显示/隐藏 API Key 相关字段
+  updateApiFieldsVisibility(currentConfig.provider);
 }
 
 // 更新引导显示
 function updateSetupGuide() {
   if (elements.setupGuide) {
-    // Ollama 不需要 API Key
-    const needsSetup = !currentConfig.apiKey && currentConfig.provider !== 'ollama';
+    // 检查是否需要 API Key
+    const providerConfig = PROVIDER_DEFAULTS[currentConfig.provider];
+    const needsApiKey = providerConfig?.needsApiKey !== false;
+    const needsSetup = needsApiKey && !currentConfig.apiKey;
     elements.setupGuide.style.display = needsSetup ? 'block' : 'none';
   }
 }
@@ -497,14 +530,42 @@ function updateProviderHint(provider) {
   }
 }
 
+// 更新API字段可见性（Google翻译不需要API配置）
+function updateApiFieldsVisibility(provider) {
+  const providerConfig = PROVIDER_DEFAULTS[provider];
+  const needsApiKey = providerConfig?.needsApiKey !== false;
+  
+  // 获取 API 相关的表单组
+  const apiEndpointGroup = elements.apiEndpoint?.closest('.form-group');
+  const apiKeyGroup = elements.apiKey?.closest('.form-group');
+  const modelNameGroup = elements.modelName?.closest('.form-group');
+  const testApiGroup = elements.testApiBtn?.closest('.form-group') || elements.testApiBtn;
+  
+  if (provider === 'google') {
+    // Google 翻译隐藏所有 API 相关字段
+    if (apiEndpointGroup) apiEndpointGroup.style.display = 'none';
+    if (apiKeyGroup) apiKeyGroup.style.display = 'none';
+    if (modelNameGroup) modelNameGroup.style.display = 'none';
+    if (testApiGroup) testApiGroup.style.display = 'none';
+  } else {
+    // 其他提供商显示字段
+    if (apiEndpointGroup) apiEndpointGroup.style.display = 'block';
+    if (apiKeyGroup) apiKeyGroup.style.display = needsApiKey ? 'block' : 'none';
+    if (modelNameGroup) modelNameGroup.style.display = 'block';
+    if (testApiGroup) testApiGroup.style.display = 'block';
+  }
+}
+
 // 更新API状态显示
 function updateApiStatus() {
   const t = window.i18n.t;
   const statusEl = elements.apiStatus;
   const itemEl = elements.apiStatusItem;
   
-  // Ollama 不需要 API Key，视为已配置
-  const isConfigured = currentConfig.apiKey || currentConfig.provider === 'ollama';
+  // 检查是否需要 API Key
+  const providerConfig = PROVIDER_DEFAULTS[currentConfig.provider];
+  const needsApiKey = providerConfig?.needsApiKey !== false;
+  const isConfigured = !needsApiKey || currentConfig.apiKey;
   
   if (isConfigured) {
     statusEl.innerHTML = `<span class="status-dot active"></span><span>${t('configured')}</span>`;
@@ -518,9 +579,10 @@ function updateApiStatus() {
 // 获取提供商名称
 function getProviderName(provider) {
   const names = {
+    deepseek: 'DeepSeek ⭐',
+    google: 'Google 翻译',
     openai: 'OpenAI',
     anthropic: 'Claude',
-    deepseek: 'DeepSeek',
     moonshot: 'Kimi',
     zhipu: '智谱GLM',
     ollama: 'Ollama',
@@ -550,11 +612,12 @@ function handleProviderChange(e) {
     elements.apiEndpoint.value = defaults.endpoint;
     elements.modelName.value = defaults.model;
     updateProviderHint(provider);
+    updateApiFieldsVisibility(provider);
     
     if (provider === 'custom') {
       elements.apiEndpoint.placeholder = window.i18n.t('apiAddress');
       elements.modelName.placeholder = window.i18n.t('modelName');
-    } else {
+    } else if (provider !== 'google') {
       elements.apiEndpoint.placeholder = defaults.endpoint;
       elements.modelName.placeholder = defaults.model;
     }
@@ -837,16 +900,21 @@ async function handleTestApi() {
 
 // 处理保存设置
 async function handleSaveSettings() {
+  const newShowFab = elements.showFab ? elements.showFab.checked : true;
+  const oldShowFab = currentConfig.showFab;
+  
   currentConfig = {
     ...currentConfig,
     provider: elements.providerSelect.value,
     apiEndpoint: elements.apiEndpoint.value.trim(),
     apiKey: elements.apiKey.value.trim(),
     modelName: elements.modelName.value.trim(),
+    sourceLang: elements.sourceLang ? elements.sourceLang.value : 'auto',
     targetLang: elements.targetLang.value,
     translationStyle: elements.translationStyle.value,
     showOriginal: elements.showOriginal.checked,
     autoDetect: elements.autoDetect.checked,
+    showFab: newShowFab,
     customPrompt: elements.customPrompt.value.trim(),
     maxTokens: parseInt(elements.maxTokens.value) || 2048,
     temperature: parseFloat(elements.temperature.value) || 0.3
@@ -854,6 +922,20 @@ async function handleSaveSettings() {
   
   await saveConfig();
   updateUI();
+  
+  // 如果 FAB 设置改变，通知内容脚本
+  if (newShowFab !== oldShowFab) {
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (tab?.id) {
+        chrome.tabs.sendMessage(tab.id, { 
+          action: newShowFab ? 'showFab' : 'hideFab' 
+        });
+      }
+    } catch (e) {
+      // 忽略错误
+    }
+  }
 }
 
 // 显示Toast提示

@@ -120,6 +120,11 @@ async function handleTranslate(texts, config) {
     return [];
   }
   
+  // Google 翻译使用单独的处理流程
+  if (config.provider === 'google') {
+    return await handleGoogleTranslate(texts, config);
+  }
+  
   // 使用限流器
   await rateLimiter.acquire();
   
@@ -143,9 +148,86 @@ async function handleTranslate(texts, config) {
   }
 }
 
+// ==================== Google 翻译 ====================
+async function handleGoogleTranslate(texts, config) {
+  const results = [];
+  const sourceLang = config.sourceLang || 'auto';
+  const targetLang = convertToGoogleLangCode(config.targetLang);
+  
+  for (const text of texts) {
+    await rateLimiter.acquire();
+    try {
+      const translation = await callGoogleTranslateApi(text, sourceLang, targetLang);
+      results.push(translation);
+    } catch (error) {
+      console.error('[OpenImmerseTranslate] Google translate error:', error);
+      results.push(text); // 失败时返回原文
+    } finally {
+      rateLimiter.release();
+    }
+  }
+  
+  return results;
+}
+
+// 转换语言代码为 Google 格式
+function convertToGoogleLangCode(langCode) {
+  const mapping = {
+    'zh-CN': 'zh-CN',
+    'zh-TW': 'zh-TW',
+    'en': 'en',
+    'ja': 'ja',
+    'ko': 'ko',
+    'fr': 'fr',
+    'de': 'de',
+    'es': 'es',
+    'ru': 'ru',
+    'ar': 'ar',
+    'pt': 'pt',
+    'it': 'it',
+    'vi': 'vi',
+    'th': 'th'
+  };
+  return mapping[langCode] || langCode;
+}
+
+// 调用 Google 翻译 API（免费版）
+async function callGoogleTranslateApi(text, sourceLang, targetLang) {
+  // 使用 Google 翻译的公共 API
+  const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=${sourceLang}&tl=${targetLang}&dt=t&q=${encodeURIComponent(text)}`;
+  
+  const response = await fetch(url, {
+    method: 'GET',
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+    }
+  });
+  
+  if (!response.ok) {
+    throw new Error(`Google Translate API error: ${response.status}`);
+  }
+  
+  const data = await response.json();
+  
+  // 解析 Google 翻译返回的数据格式
+  // 格式: [[["翻译结果","原文",null,null,1]],null,"en"]
+  if (data && data[0]) {
+    let translation = '';
+    for (const part of data[0]) {
+      if (part[0]) {
+        translation += part[0];
+      }
+    }
+    return translation || text;
+  }
+  
+  return text;
+}
+
 // ==================== 提示词构建 ====================
 function buildSystemPrompt(config) {
   const langNames = {
+    'auto': '自动检测',
     'zh-CN': '简体中文',
     'zh-TW': '繁體中文',
     'en': 'English',
@@ -155,7 +237,11 @@ function buildSystemPrompt(config) {
     'de': 'Deutsch',
     'es': 'Español',
     'ru': 'Русский',
-    'ar': 'العربية'
+    'ar': 'العربية',
+    'pt': 'Português',
+    'it': 'Italiano',
+    'vi': 'Tiếng Việt',
+    'th': 'ไทย'
   };
   
   const styleGuides = {
@@ -165,16 +251,25 @@ function buildSystemPrompt(config) {
   };
   
   const targetLang = langNames[config.targetLang] || config.targetLang;
+  const sourceLang = config.sourceLang && config.sourceLang !== 'auto' 
+    ? langNames[config.sourceLang] || config.sourceLang 
+    : null;
   const styleGuide = styleGuides[config.translationStyle] || styleGuides.accurate;
   
   if (config.customPrompt && config.customPrompt.trim()) {
-    return config.customPrompt.replace('{targetLang}', targetLang);
+    return config.customPrompt
+      .replace('{targetLang}', targetLang)
+      .replace('{sourceLang}', sourceLang || '自动检测');
   }
+  
+  const sourceInstruction = sourceLang 
+    ? `源语言是${sourceLang}` 
+    : '自动识别源语言';
   
   return `你是一个专业的翻译助手。将文本翻译成${targetLang}。
 
 要求：
-1. 自动识别源语言
+1. ${sourceInstruction}
 2. 翻译风格：${styleGuide}
 3. 如果已是${targetLang}，返回原文
 4. 只返回翻译结果，不加解释
@@ -335,6 +430,10 @@ async function handleTestApi(config) {
     
     try {
       switch (config.provider) {
+        case 'google':
+          // Google 翻译测试
+          await callGoogleTranslateApi(testPrompt, 'en', convertToGoogleLangCode(config.targetLang));
+          break;
         case 'anthropic':
           await callAnthropicApi(`翻译成${targetLang}`, testPrompt, config);
           break;
@@ -377,7 +476,11 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
       const result = await chrome.storage.sync.get('config');
       const config = result.config || {};
       
-      if (!config.apiKey) {
+      // 检查是否需要 API Key（Google 和 Ollama 不需要）
+      const noKeyProviders = ['google', 'ollama'];
+      const needsApiKey = !noKeyProviders.includes(config.provider);
+      
+      if (needsApiKey && !config.apiKey) {
         chrome.action.openPopup();
         return;
       }
