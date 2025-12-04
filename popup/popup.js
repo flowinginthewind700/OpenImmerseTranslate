@@ -1,77 +1,302 @@
 /**
  * Open Immerse Translate - Popup Script
- * 弹出窗口的交互逻辑 + 国际化支持
+ * 弹出窗口的交互逻辑 + 国际化支持 + 模块化配置管理
  */
 
-// 默认配置 - 默认使用 Google 翻译（免费），推荐 DeepSeek
-const DEFAULT_CONFIG = {
-  provider: 'google',  // 默认免费 Google 翻译，无需配置即可使用
-  apiEndpoint: '',     // Google 翻译不需要
-  apiKey: '',          // Google 翻译不需要
-  modelName: '',       // Google 翻译不需要
-  sourceLang: 'auto',  // 源语言：auto 自动检测，或指定语言代码
-  targetLang: 'zh-CN',
+// ==================== 模块化配置系统 ====================
+
+/**
+ * 全局配置（非 provider 相关）
+ */
+const DEFAULT_GLOBAL_CONFIG = {
+  provider: 'google',      // 当前选择的 provider
+  sourceLang: 'auto',      // 源语言
+  targetLang: 'zh-CN',     // 目标语言
   translationStyle: 'accurate',
   showOriginal: true,
-  autoDetect: true,  // 智能跳过目标语言内容
-  showFab: true,     // 显示悬浮翻译按钮
+  autoDetect: true,
+  showFab: true,
   customPrompt: '',
   maxTokens: 2048,
   temperature: 0.3,
-  uiLanguage: '' // 空表示跟随系统
+  uiLanguage: ''
 };
 
-// 提供商默认配置
+/**
+ * Provider 配置模板
+ * 每个 provider 独立存储：endpoint, apiKey, modelName
+ */
 const PROVIDER_DEFAULTS = {
+  google: {
+    endpoint: '',
+    model: '',
+    apiKey: '',
+    hintKey: 'hintGoogle',
+    needsApiKey: false,
+    displayName: 'Google 翻译'
+  },
   deepseek: {
     endpoint: 'https://api.deepseek.com/v1/chat/completions',
     model: 'deepseek-chat',
+    apiKey: '',
     hintKey: 'hintDeepSeek',
-    needsApiKey: true
-  },
-  google: {
-    endpoint: '',  // Google Translate 使用内置接口
-    model: '',
-    hintKey: 'hintGoogle',
-    needsApiKey: false  // 免费，无需 API Key
+    needsApiKey: true,
+    displayName: 'DeepSeek'
   },
   openai: {
     endpoint: 'https://api.openai.com/v1/chat/completions',
     model: 'gpt-4o-mini',
+    apiKey: '',
     hintKey: 'hintOpenAI',
-    needsApiKey: true
+    needsApiKey: true,
+    displayName: 'OpenAI'
   },
   anthropic: {
     endpoint: 'https://api.anthropic.com/v1/messages',
     model: 'claude-3-haiku-20240307',
+    apiKey: '',
     hintKey: 'hintAnthropic',
-    needsApiKey: true
+    needsApiKey: true,
+    displayName: 'Claude'
   },
   moonshot: {
     endpoint: 'https://api.moonshot.cn/v1/chat/completions',
     model: 'moonshot-v1-8k',
+    apiKey: '',
     hintKey: 'hintMoonshot',
-    needsApiKey: true
+    needsApiKey: true,
+    displayName: 'Moonshot'
   },
   zhipu: {
     endpoint: 'https://open.bigmodel.cn/api/paas/v4/chat/completions',
     model: 'glm-4-flash',
+    apiKey: '',
     hintKey: 'hintZhipu',
-    needsApiKey: true
+    needsApiKey: true,
+    displayName: '智谱 GLM'
   },
   ollama: {
     endpoint: 'http://localhost:11434/api/chat',
     model: 'qwen3',
+    apiKey: '',
     hintKey: 'hintOllama',
-    needsApiKey: false
+    needsApiKey: false,
+    displayName: 'Ollama'
   },
   custom: {
     endpoint: '',
     model: '',
+    apiKey: '',
     hintKey: 'hintCustom',
-    needsApiKey: true
+    needsApiKey: true,
+    displayName: '自定义 API'
   }
 };
+
+/**
+ * 配置管理器 - 模块化存储和读取配置
+ */
+const ConfigManager = {
+  // 存储键名
+  STORAGE_KEY_GLOBAL: 'globalConfig',
+  STORAGE_KEY_PROVIDERS: 'providerConfigs',
+  
+  // 内存缓存
+  _globalConfig: null,
+  _providerConfigs: null,
+  
+  /**
+   * 初始化配置
+   */
+  async init() {
+    await this.load();
+  },
+  
+  /**
+   * 从存储加载配置
+   */
+  async load() {
+    try {
+      const result = await chrome.storage.sync.get([
+        this.STORAGE_KEY_GLOBAL,
+        this.STORAGE_KEY_PROVIDERS
+      ]);
+      
+      // 全局配置
+      this._globalConfig = {
+        ...DEFAULT_GLOBAL_CONFIG,
+        ...(result[this.STORAGE_KEY_GLOBAL] || {})
+      };
+      
+      // Provider 配置（每个 provider 独立存储）
+      this._providerConfigs = {};
+      const savedProviders = result[this.STORAGE_KEY_PROVIDERS] || {};
+      
+      // 合并默认配置和已保存的配置
+      for (const [providerId, defaults] of Object.entries(PROVIDER_DEFAULTS)) {
+        this._providerConfigs[providerId] = {
+          endpoint: defaults.endpoint,
+          model: defaults.model,
+          apiKey: '',
+          ...(savedProviders[providerId] || {})
+        };
+      }
+      
+      console.log('[ConfigManager] Loaded config:', {
+        global: this._globalConfig,
+        providers: Object.keys(this._providerConfigs)
+      });
+      
+    } catch (error) {
+      console.error('[ConfigManager] Failed to load:', error);
+      this._globalConfig = { ...DEFAULT_GLOBAL_CONFIG };
+      this._providerConfigs = {};
+    }
+  },
+  
+  /**
+   * 保存全局配置
+   */
+  async saveGlobal(config) {
+    this._globalConfig = { ...this._globalConfig, ...config };
+    await chrome.storage.sync.set({
+      [this.STORAGE_KEY_GLOBAL]: this._globalConfig
+    });
+  },
+  
+  /**
+   * 保存单个 Provider 配置
+   */
+  async saveProvider(providerId, config) {
+    if (!this._providerConfigs[providerId]) {
+      this._providerConfigs[providerId] = {};
+    }
+    this._providerConfigs[providerId] = {
+      ...this._providerConfigs[providerId],
+      ...config
+    };
+    await chrome.storage.sync.set({
+      [this.STORAGE_KEY_PROVIDERS]: this._providerConfigs
+    });
+  },
+  
+  /**
+   * 获取全局配置
+   */
+  getGlobal() {
+    return { ...this._globalConfig };
+  },
+  
+  /**
+   * 获取当前 Provider ID
+   */
+  getCurrentProvider() {
+    return this._globalConfig?.provider || 'google';
+  },
+  
+  /**
+   * 设置当前 Provider
+   */
+  async setCurrentProvider(providerId) {
+    await this.saveGlobal({ provider: providerId });
+  },
+  
+  /**
+   * 获取 Provider 配置
+   */
+  getProviderConfig(providerId) {
+    const defaults = PROVIDER_DEFAULTS[providerId] || PROVIDER_DEFAULTS.custom;
+    const saved = this._providerConfigs?.[providerId] || {};
+    return {
+      endpoint: saved.endpoint || defaults.endpoint,
+      model: saved.model || defaults.model,
+      apiKey: saved.apiKey || '',
+      needsApiKey: defaults.needsApiKey,
+      hintKey: defaults.hintKey,
+      displayName: defaults.displayName
+    };
+  },
+  
+  /**
+   * 获取当前完整配置（用于翻译）
+   */
+  getCurrentFullConfig() {
+    const global = this.getGlobal();
+    const provider = this.getProviderConfig(global.provider);
+    return {
+      provider: global.provider,
+      apiEndpoint: provider.endpoint,
+      apiKey: provider.apiKey,
+      modelName: provider.model,
+      sourceLang: global.sourceLang,
+      targetLang: global.targetLang,
+      translationStyle: global.translationStyle,
+      showOriginal: global.showOriginal,
+      autoDetect: global.autoDetect,
+      customPrompt: global.customPrompt,
+      maxTokens: global.maxTokens,
+      temperature: global.temperature
+    };
+  },
+  
+  /**
+   * 检查当前 Provider 是否已配置
+   */
+  isCurrentProviderConfigured() {
+    const provider = this.getCurrentProvider();
+    const config = this.getProviderConfig(provider);
+    if (!config.needsApiKey) return true;
+    return !!config.apiKey;
+  },
+  
+  /**
+   * 迁移旧版配置（兼容性）
+   */
+  async migrateOldConfig() {
+    try {
+      const result = await chrome.storage.sync.get('config');
+      if (result.config) {
+        const old = result.config;
+        
+        // 迁移全局配置
+        await this.saveGlobal({
+          provider: old.provider || 'google',
+          sourceLang: old.sourceLang || 'auto',
+          targetLang: old.targetLang || 'zh-CN',
+          translationStyle: old.translationStyle || 'accurate',
+          showOriginal: old.showOriginal !== false,
+          autoDetect: old.autoDetect !== false,
+          showFab: old.showFab !== false,
+          customPrompt: old.customPrompt || '',
+          maxTokens: old.maxTokens || 2048,
+          temperature: old.temperature || 0.3,
+          uiLanguage: old.uiLanguage || ''
+        });
+        
+        // 如果有 API Key，迁移到对应的 provider
+        if (old.apiKey && old.provider) {
+          await this.saveProvider(old.provider, {
+            endpoint: old.apiEndpoint || PROVIDER_DEFAULTS[old.provider]?.endpoint || '',
+            model: old.modelName || PROVIDER_DEFAULTS[old.provider]?.model || '',
+            apiKey: old.apiKey
+          });
+        }
+        
+        // 删除旧配置
+        await chrome.storage.sync.remove('config');
+        console.log('[ConfigManager] Migrated old config');
+      }
+    } catch (error) {
+      console.error('[ConfigManager] Migration failed:', error);
+    }
+  }
+};
+
+// 兼容旧代码的 currentConfig（将被逐步替换）
+let currentConfig = {};
+
+// 兼容旧代码的 DEFAULT_CONFIG
+const DEFAULT_CONFIG = DEFAULT_GLOBAL_CONFIG;
 
 // 语言名称映射
 const LANG_NAMES = {
@@ -386,24 +611,52 @@ function escapeHtml(text) {
 // 加载配置
 async function loadConfig() {
   try {
-    const result = await chrome.storage.sync.get('config');
-    if (result.config) {
-      currentConfig = { ...DEFAULT_CONFIG, ...result.config };
-    }
+    // 先尝试迁移旧配置
+    await ConfigManager.migrateOldConfig();
+    
+    // 初始化配置管理器
+    await ConfigManager.init();
+    
+    // 兼容旧代码：设置 currentConfig
+    currentConfig = ConfigManager.getCurrentFullConfig();
     
     // 设置UI语言
-    if (currentConfig.uiLanguage) {
-      window.i18n.setLanguage(currentConfig.uiLanguage);
+    const global = ConfigManager.getGlobal();
+    if (global.uiLanguage) {
+      window.i18n.setLanguage(global.uiLanguage);
     }
+    
+    console.log('[Popup] Config loaded:', currentConfig);
   } catch (error) {
     console.error('Failed to load config:', error);
   }
 }
 
-// 保存配置
+// 保存配置（使用 ConfigManager）
 async function saveConfig() {
   try {
-    await chrome.storage.sync.set({ config: currentConfig });
+    // 保存全局配置
+    await ConfigManager.saveGlobal({
+      provider: currentConfig.provider,
+      sourceLang: currentConfig.sourceLang,
+      targetLang: currentConfig.targetLang,
+      translationStyle: currentConfig.translationStyle,
+      showOriginal: currentConfig.showOriginal,
+      autoDetect: currentConfig.autoDetect,
+      showFab: currentConfig.showFab,
+      customPrompt: currentConfig.customPrompt,
+      maxTokens: currentConfig.maxTokens,
+      temperature: currentConfig.temperature,
+      uiLanguage: currentConfig.uiLanguage
+    });
+    
+    // 保存当前 Provider 的配置
+    await ConfigManager.saveProvider(currentConfig.provider, {
+      endpoint: currentConfig.apiEndpoint,
+      model: currentConfig.modelName,
+      apiKey: currentConfig.apiKey
+    });
+    
     showToast(window.i18n.t('settingsSaved'), 'success');
   } catch (error) {
     console.error('Failed to save config:', error);
@@ -522,10 +775,8 @@ function updateUI() {
 // 更新引导显示
 function updateSetupGuide() {
   if (elements.setupGuide) {
-    // 检查是否需要 API Key
-    const providerConfig = PROVIDER_DEFAULTS[currentConfig.provider];
-    const needsApiKey = providerConfig?.needsApiKey !== false;
-    const needsSetup = needsApiKey && !currentConfig.apiKey;
+    // 使用 ConfigManager 检查是否需要配置
+    const needsSetup = !ConfigManager.isCurrentProviderConfigured();
     elements.setupGuide.style.display = needsSetup ? 'block' : 'none';
   }
 }
@@ -570,10 +821,8 @@ function updateApiStatus() {
   const statusEl = elements.apiStatus;
   const itemEl = elements.apiStatusItem;
   
-  // 检查是否需要 API Key
-  const providerConfig = PROVIDER_DEFAULTS[currentConfig.provider];
-  const needsApiKey = providerConfig?.needsApiKey !== false;
-  const isConfigured = !needsApiKey || currentConfig.apiKey;
+  // 使用 ConfigManager 检查配置状态
+  const isConfigured = ConfigManager.isCurrentProviderConfigured();
   
   if (isConfigured) {
     statusEl.innerHTML = `<span class="status-dot active"></span><span>${t('configured')}</span>`;
@@ -586,17 +835,16 @@ function updateApiStatus() {
 
 // 获取提供商名称
 function getProviderName(provider) {
-  const names = {
-    deepseek: 'DeepSeek ⭐',
-    google: 'Google 翻译',
-    openai: 'OpenAI',
-    anthropic: 'Claude',
-    moonshot: 'Kimi',
-    zhipu: '智谱GLM',
-    ollama: 'Ollama',
-    custom: window.i18n.t('providerCustom')
-  };
-  return names[provider] || provider;
+  // 使用 PROVIDER_DEFAULTS 中的 displayName
+  const config = PROVIDER_DEFAULTS[provider];
+  if (config?.displayName) {
+    // DeepSeek 加星标推荐
+    if (provider === 'deepseek') {
+      return config.displayName + ' ⭐';
+    }
+    return config.displayName;
+  }
+  return provider;
 }
 
 // 显示面板
@@ -617,8 +865,14 @@ function handleProviderChange(e) {
   const defaults = PROVIDER_DEFAULTS[provider];
   
   if (defaults) {
-    elements.apiEndpoint.value = defaults.endpoint;
-    elements.modelName.value = defaults.model;
+    // 🔥 关键：加载该 Provider 已保存的配置
+    const savedConfig = ConfigManager.getProviderConfig(provider);
+    
+    // 使用已保存的配置，如果没有则使用默认值
+    elements.apiEndpoint.value = savedConfig.endpoint || defaults.endpoint;
+    elements.modelName.value = savedConfig.model || defaults.model;
+    elements.apiKey.value = savedConfig.apiKey || '';
+    
     updateProviderHint(provider);
     updateApiFieldsVisibility(provider);
     
@@ -628,6 +882,11 @@ function handleProviderChange(e) {
     } else if (provider !== 'google') {
       elements.apiEndpoint.placeholder = defaults.endpoint;
       elements.modelName.placeholder = defaults.model;
+    }
+    
+    // 如果已保存了 API Key，显示提示
+    if (savedConfig.apiKey) {
+      console.log(`[Popup] Loaded saved API key for ${provider}`);
     }
   }
 }
@@ -933,7 +1192,8 @@ async function handleFabToggle() {
   const newShowFab = elements.fabToggle.checked;
   currentConfig.showFab = newShowFab;
   
-  await saveConfig();
+  // 直接使用 ConfigManager 保存 FAB 设置
+  await ConfigManager.saveGlobal({ showFab: newShowFab });
   
   // 通知内容脚本
   try {
