@@ -4,19 +4,17 @@
 
 <img src="icons/icon.svg" width="120" height="120" alt="Open Immerse Translate">
 
-**开源沉浸式翻译 Chrome 扩展**
+**开源沉浸式翻译 Chrome 扩展 | Open Source Immersive Translation Chrome Extension**
 
-支持自定义 LLM API 的双语对照翻译工具
+双语对照翻译，开箱即用 | Bilingual Translation, Ready to Use
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Chrome Extension](https://img.shields.io/badge/Chrome-Extension-green.svg)](https://developer.chrome.com/docs/extensions/)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
-[English](#english) • [功能特点](#-功能特点) • [快速开始](#-快速开始) • [使用指南](#-使用指南) • [开发](#-开发)
+[🇨🇳 中文](#-功能特点) • [🇺🇸 English](#-english)
 
 ---
-
-<img src="docs/demo.gif" width="600" alt="Demo">
 
 </div>
 
@@ -26,40 +24,41 @@
 <tr>
 <td width="50%">
 
-### 🎯 沉浸式翻译
-- 译文内嵌于原文下方，保持阅读流畅性
-- 原文与译文双语对照，便于学习
-- 自动检测源语言，智能翻译
+### 🆓 开箱即用
+- **默认免费** - 内置 Google 翻译，无需配置
+- **一键翻译** - 点击即可翻译整个页面
+- 可升级到 AI 翻译获得更好体验
 
 </td>
 <td width="50%">
 
-### ⚡ 悬浮快捷按钮
-- 页面右侧悬浮翻译按钮，一键翻译
-- 支持拖拽自定义位置
-- 自动吸附边缘，位置持久保存
+### 🎯 沉浸式翻译
+- 译文内嵌于原文下方
+- 双语对照，便于学习
+- 保持阅读流畅性
 
 </td>
 </tr>
 <tr>
 <td width="50%">
 
-### 🤖 多 LLM 支持
-- OpenAI (GPT-4o, GPT-4o-mini)
+### 🤖 多 AI 模型支持
+- ⭐ **DeepSeek** (推荐，性价比最高)
+- OpenAI (GPT-4o)
 - Anthropic Claude
-- DeepSeek
 - Moonshot (Kimi)
 - 智谱 GLM
+- Ollama (本地运行)
 - 任意 OpenAI 兼容 API
 
 </td>
 <td width="50%">
 
-### 🚀 智能性能优化
+### ⚡ 智能翻译
 - 视口优先翻译算法
-- 渐进式加载，滚动触发
-- 批量请求 + 限流控制
-- 指数退避重试机制
+- 滚动时自动翻译新内容
+- 流式翻译，边翻边显示
+- 源语言可选（默认自动检测）
 
 </td>
 </tr>
@@ -69,41 +68,53 @@
 
 ### 安装
 
-#### 方式一：从源码安装（推荐）
+#### 方式一：下载 Release（推荐）
+
+1. 前往 [Releases](https://github.com/flowinginthewind700/OpenImmerseTranslate/releases) 页面
+2. 下载最新版本的 `OpenImmerseTranslate-vX.X.X.zip`
+3. 解压到任意文件夹
+4. 打开 Chrome，访问 `chrome://extensions/`
+5. 开启右上角「**开发者模式**」
+6. 点击「**加载已解压的扩展程序**」
+7. 选择解压后的文件夹
+
+#### 方式二：从源码安装
 
 ```bash
-# 1. 克隆仓库
 git clone https://github.com/flowinginthewind700/OpenImmerseTranslate.git
 cd OpenImmerseTranslate
-
-# 2. 构建（可选）
 npm install
 npm run build
 ```
 
-然后在 Chrome 中加载：
+然后加载 `dist/OpenImmerseTranslate` 文件夹。
 
-1. 打开 `chrome://extensions/`
-2. 开启右上角「**开发者模式**」
-3. 点击「**加载已解压的扩展程序**」
-4. 选择项目根目录或 `dist/OpenImmerseTranslate` 文件夹
+### 开始使用
 
-#### 方式二：下载 Release
+**无需任何配置，安装后即可使用！**
 
-1. 前往 [Releases](https://github.com/flowinginthewind700/OpenImmerseTranslate/releases) 页面
-2. 下载最新版本的 `OpenImmerseTranslate-vX.X.X.zip`
-3. 解压后按上述步骤加载
+1. 点击页面右侧的悬浮翻译按钮 🌐
+2. 或点击浏览器工具栏的扩展图标 → 「翻译当前页面」
+3. 享受双语阅读！
 
-### 配置 API
+## ⭐ 推荐升级到 DeepSeek
 
-首次使用需配置 LLM 服务：
+默认的 Google 翻译适合轻度使用。如需更好的翻译质量，推荐使用 **DeepSeek**：
 
-1. 点击浏览器工具栏的扩展图标
-2. 点击右上角 **设置** ⚙️
-3. 选择服务提供商
-4. 填入 API 地址和密钥
-5. 点击「测试连接」验证
-6. 保存设置
+| 优势 | 说明 |
+|-----|------|
+| 💰 **超高性价比** | API 价格极低，几乎免费 |
+| 🚀 **速度快** | 响应迅速，体验流畅 |
+| 🎯 **质量优秀** | AI 翻译，更准确自然 |
+
+**配置步骤：**
+
+1. 访问 [DeepSeek 官网](https://platform.deepseek.com/) 注册
+2. 获取 API Key
+3. 在插件设置中：
+   - 服务提供商选择 `DeepSeek`
+   - 填入 API Key
+   - 保存设置
 
 ## 📖 使用指南
 
@@ -118,64 +129,32 @@ npm run build
 ### 翻译选中文本
 
 1. 选中网页上的文本
-2. 点击出现的 🌐 翻译按钮
-3. 查看翻译结果，支持复制
+2. 点击出现的翻译按钮
+3. 查看翻译结果
 
 ### 悬浮按钮
 
 - **拖拽移动**：按住按钮拖动到任意位置
 - **自动吸附**：松开后自动吸附到左/右边缘
-- **隐藏按钮**：悬停时点击 × 关闭
-- **位置记忆**：刷新页面后恢复上次位置
+- **显示/隐藏**：在设置 → 界面设置中开关
 
-## 🔧 支持的 LLM 服务
+### 源语言设置
 
-| 服务商 | API 地址 | 推荐模型 |
-|--------|----------|----------|
-| **OpenAI** | `https://api.openai.com/v1/chat/completions` | `gpt-4o-mini` |
-| **Anthropic** | `https://api.anthropic.com/v1/messages` | `claude-3-haiku-20240307` |
-| **DeepSeek** | `https://api.deepseek.com/v1/chat/completions` | `deepseek-chat` |
-| **Moonshot** | `https://api.moonshot.cn/v1/chat/completions` | `moonshot-v1-8k` |
-| **智谱 GLM** | `https://open.bigmodel.cn/api/paas/v4/chat/completions` | `glm-4-flash` |
-| **Ollama** | `http://localhost:11434/v1/chat/completions` | `llama3.2` |
-| **自定义** | 任意 OpenAI 兼容 API | - |
+默认自动检测源语言。如需指定，可在设置中选择：
 
-### 自定义 API
+🇺🇸 English • 🇨🇳 简体中文 • 🇹🇼 繁體中文 • 🇯🇵 日本語 • 🇰🇷 한국어 • 🇫🇷 Français • 🇩🇪 Deutsch • 🇪🇸 Español • 🇷🇺 Русский • 🇸🇦 العربية • 🇵🇹 Português • 🇮🇹 Italiano • 🇻🇳 Tiếng Việt • 🇹🇭 ไทย
 
-支持任何兼容 OpenAI Chat Completions API 格式的服务：
+## 🔧 支持的翻译服务
 
-```
-POST /v1/chat/completions
-Authorization: Bearer <API_KEY>
-
-{
-  "model": "your-model",
-  "messages": [{"role": "user", "content": "..."}]
-}
-```
-
-## 🌍 支持的语言
-
-<table>
-<tr>
-<td>🇨🇳 简体中文</td>
-<td>🇹🇼 繁體中文</td>
-<td>🇺🇸 English</td>
-<td>🇯🇵 日本語</td>
-</tr>
-<tr>
-<td>🇰🇷 한국어</td>
-<td>🇫🇷 Français</td>
-<td>🇩🇪 Deutsch</td>
-<td>🇪🇸 Español</td>
-</tr>
-<tr>
-<td>🇷🇺 Русский</td>
-<td>🇸🇦 العربية</td>
-<td>🇵🇹 Português</td>
-<td>🇮🇹 Italiano</td>
-</tr>
-</table>
+| 服务商 | 费用 | API Key | 推荐指数 |
+|--------|------|---------|----------|
+| **Google 翻译** | 免费 | 不需要 | ⭐⭐⭐ |
+| **DeepSeek** | 极低 | 需要 | ⭐⭐⭐⭐⭐ |
+| **OpenAI** | 中等 | 需要 | ⭐⭐⭐⭐ |
+| **Anthropic Claude** | 中等 | 需要 | ⭐⭐⭐⭐ |
+| **Moonshot Kimi** | 低 | 需要 | ⭐⭐⭐⭐ |
+| **智谱 GLM** | 低 | 需要 | ⭐⭐⭐⭐ |
+| **Ollama** | 免费 | 不需要 | ⭐⭐⭐ |
 
 ## 🛠 开发
 
@@ -195,91 +174,24 @@ OpenImmerseTranslate/
 │   └── service-worker.js  # API 请求处理
 ├── styles/
 │   └── content.css        # 页面注入样式
-├── icons/                  # 图标资源
-├── scripts/
-│   ├── build.js           # 构建脚本
-│   └── create-icons.js    # 图标生成
-└── dist/                   # 构建输出
+└── icons/                  # 图标资源
 ```
 
 ### 本地开发
 
 ```bash
-# 安装依赖
-npm install
-
-# 构建
-npm run build
-
-# 生成图标
-npm run icons
+npm install      # 安装依赖
+npm run build    # 构建
+npm run icons    # 生成图标
 ```
-
-### 技术栈
-
-- **Chrome Extension Manifest V3**
-- **Intersection Observer API** - 视口检测
-- **Chrome Storage API** - 配置持久化
-- **Fetch API** - LLM 请求
-
-### 核心算法
-
-#### 视口优先翻译
-
-```
-┌─────────────────────────────────┐
-│                                 │
-│  ┌───────────────────────────┐  │
-│  │      已翻译内容            │  │  ← 已翻译
-│  └───────────────────────────┘  │
-│                                 │
-│  ╔═══════════════════════════╗  │
-│  ║      当前视口             ║  │  ← 优先翻译
-│  ║                           ║  │
-│  ╚═══════════════════════════╝  │
-│                                 │
-│  ┌───────────────────────────┐  │
-│  │      预加载区域            │  │  ← 预加载 1 屏
-│  └───────────────────────────┘  │
-│                                 │
-│  ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┐  │
-│       待翻译（滚动触发）         │  ← 延迟加载
-│  └ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘  │
-│                                 │
-└─────────────────────────────────┘
-```
-
-#### 限流策略
-
-- 最大并发请求：2
-- 请求间隔：1.5s
-- 指数退避重试：3 次（2s → 4s → 8s）
 
 ## 🤝 贡献
 
 欢迎提交 Issue 和 Pull Request！
 
-1. Fork 本仓库
-2. 创建特性分支：`git checkout -b feature/amazing-feature`
-3. 提交更改：`git commit -m 'Add amazing feature'`
-4. 推送分支：`git push origin feature/amazing-feature`
-5. 提交 Pull Request
-
-### 贡献指南
-
-- 遵循现有代码风格
-- 添加必要的注释
-- 更新相关文档
-- 确保功能正常工作
-
 ## 📄 License
 
-本项目采用 [MIT License](LICENSE) 开源协议。
-
-## 🙏 致谢
-
-- 本项目受 [沉浸式翻译](https://immersivetranslate.com/) 启发
-- 感谢所有贡献者的支持
+[MIT License](LICENSE)
 
 ## 📬 联系作者
 
@@ -293,12 +205,6 @@ npm run icons
   </a>
 </p>
 
-如有问题或建议，欢迎通过以下方式联系：
-
-- 🐦 **Twitter**: [@McQueenFu](https://x.com/McQueenFu)
-- 💼 **LinkedIn**: [McQueenFu](https://www.linkedin.com/in/mcqueenfu/)
-- 📝 **GitHub Issues**: [提交 Issue](https://github.com/flowinginthewind700/OpenImmerseTranslate/issues)
-
 ---
 
 <div align="center">
@@ -311,35 +217,99 @@ Made with ❤️ by [@McQueenFu](https://x.com/McQueenFu)
 
 ---
 
-<a name="english"></a>
+<a name="-english"></a>
 
-## English
+# 🇺🇸 English
 
-### Overview
+## Overview
 
-Open Immerse Translate is an open-source Chrome extension for immersive bilingual translation. It displays translations below the original text, supporting various LLM APIs including OpenAI, Claude, DeepSeek, and any OpenAI-compatible APIs.
+**Open Immerse Translate** is an open-source Chrome extension for immersive bilingual translation. It works out of the box with free Google Translate, and can be upgraded to AI-powered translation for better quality.
 
-### Features
+## ✨ Features
 
-- 🌐 **Immersive Translation** - Inline bilingual display
-- ⚡ **Floating Action Button** - One-click translation from any page
-- 🤖 **Multi-LLM Support** - OpenAI, Claude, DeepSeek, Kimi, and more
-- 🚀 **Smart Performance** - Viewport-first translation with progressive loading
-- 🌍 **Multi-language** - UI supports Chinese and English
+- 🆓 **Free to Use** - Built-in Google Translate, no configuration needed
+- 🎯 **Immersive Translation** - Translations displayed below original text
+- 🤖 **Multiple AI Models** - DeepSeek (recommended), OpenAI, Claude, and more
+- ⚡ **Smart Performance** - Viewport-first translation with streaming display
+- 🌍 **Multi-language** - 14 languages supported
 
-### Quick Start
+## 📦 Quick Start
 
-1. Clone the repository
-2. Open `chrome://extensions/`
-3. Enable "Developer mode"
-4. Click "Load unpacked" and select the project folder
-5. Configure your LLM API in settings
+### Installation
 
-### Contact
+1. Go to [Releases](https://github.com/flowinginthewind700/OpenImmerseTranslate/releases)
+2. Download the latest `OpenImmerseTranslate-vX.X.X.zip`
+3. Extract to any folder
+4. Open Chrome, go to `chrome://extensions/`
+5. Enable "Developer mode"
+6. Click "Load unpacked"
+7. Select the extracted folder
+
+### Usage
+
+**No configuration needed! Just install and use!**
+
+1. Click the floating translate button 🌐 on the right side of any page
+2. Or click the extension icon → "Translate Page"
+3. Enjoy bilingual reading!
+
+## ⭐ Recommended: Upgrade to DeepSeek
+
+For better translation quality, we recommend **DeepSeek**:
+
+| Advantage | Description |
+|-----------|-------------|
+| 💰 **Cost-effective** | Extremely low API price |
+| 🚀 **Fast** | Quick response |
+| 🎯 **Quality** | Excellent AI translation |
+
+**Setup:**
+
+1. Visit [DeepSeek](https://platform.deepseek.com/) and register
+2. Get your API Key
+3. In extension settings: Select `DeepSeek`, enter API Key, Save
+
+## 🔧 Supported Services
+
+| Service | Cost | API Key | Rating |
+|---------|------|---------|--------|
+| **Google Translate** | Free | Not needed | ⭐⭐⭐ |
+| **DeepSeek** | Very low | Required | ⭐⭐⭐⭐⭐ |
+| **OpenAI** | Medium | Required | ⭐⭐⭐⭐ |
+| **Claude** | Medium | Required | ⭐⭐⭐⭐ |
+| **Moonshot Kimi** | Low | Required | ⭐⭐⭐⭐ |
+| **Ollama** | Free | Not needed | ⭐⭐⭐ |
+
+## 📖 Features
+
+### Source Language
+
+Default: Auto Detect. Supported languages:
+
+🇺🇸 English • 🇨🇳 Chinese • 🇯🇵 Japanese • 🇰🇷 Korean • 🇫🇷 French • 🇩🇪 German • 🇪🇸 Spanish • 🇷🇺 Russian • 🇸🇦 Arabic • 🇵🇹 Portuguese • 🇮🇹 Italian • 🇻🇳 Vietnamese • 🇹🇭 Thai
+
+### Floating Button
+
+- **Drag & Drop** - Move to any position
+- **Auto Snap** - Snaps to left/right edge
+- **Toggle** - Show/hide in Settings → Interface
+
+## 📬 Contact
 
 - 🐦 Twitter: [@McQueenFu](https://x.com/McQueenFu)
 - 💼 LinkedIn: [McQueenFu](https://www.linkedin.com/in/mcqueenfu/)
+- 📝 Issues: [GitHub Issues](https://github.com/flowinginthewind700/OpenImmerseTranslate/issues)
 
-### License
+## 📄 License
 
-MIT License
+[MIT License](LICENSE)
+
+---
+
+<div align="center">
+
+**If you find this project helpful, please give it a ⭐ Star!**
+
+Made with ❤️ by [@McQueenFu](https://x.com/McQueenFu)
+
+</div>

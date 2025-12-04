@@ -5,10 +5,10 @@
 
 // 默认配置
 const DEFAULT_CONFIG = {
-  provider: 'deepseek',
-  apiEndpoint: 'https://api.deepseek.com/v1/chat/completions',
+  provider: 'google',  // 默认使用 Google 翻译（免费），推荐升级到 DeepSeek
+  apiEndpoint: '',
   apiKey: '',
-  modelName: 'deepseek-chat',
+  modelName: '',
   sourceLang: 'auto',  // 源语言：auto 自动检测，或指定语言代码
   targetLang: 'zh-CN',
   translationStyle: 'accurate',
