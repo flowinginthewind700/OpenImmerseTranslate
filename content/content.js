@@ -1706,29 +1706,39 @@ function updateFabStatus(status) {
 // 检查是否应该显示 FAB
 async function shouldShowFab() {
   try {
-    // 检查用户设置（sync storage 中的 config.showFab）
     const syncResult = await chrome.storage.sync.get('config');
-    // 如果没有配置或者 showFab 不是 false，则显示（默认显示）
+    // 默认显示，除非明确设置为 false
     if (syncResult.config && syncResult.config.showFab === false) {
       return false;
     }
     return true;
   } catch (e) {
     console.log('[OIT] Error checking FAB setting:', e);
-    return true; // 默认显示
+    return true;
   }
 }
 
-// 初始化 FAB
+// 初始化 FAB（带重试机制）
 async function initFabOnLoad() {
-  // 等待一小段时间确保 DOM 完全加载
-  await new Promise(resolve => setTimeout(resolve, 100));
+  // 等待 DOM 和 body 完全可用
+  let retries = 0;
+  while (!document.body && retries < 10) {
+    await new Promise(resolve => setTimeout(resolve, 100));
+    retries++;
+  }
   
-  if (await shouldShowFab()) {
-    console.log('[OIT] Initializing FAB');
+  if (!document.body) {
+    console.error('[OIT] document.body not available');
+    return;
+  }
+  
+  // 检查是否应该显示
+  const shouldShow = await shouldShowFab();
+  console.log('[OIT] Should show FAB:', shouldShow);
+  
+  if (shouldShow) {
     initFAB();
-  } else {
-    console.log('[OIT] FAB disabled by user setting');
+    console.log('[OIT] FAB initialized');
   }
 }
 
@@ -1736,5 +1746,6 @@ async function initFabOnLoad() {
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', initFabOnLoad);
 } else {
+  // DOM 已加载，直接初始化
   initFabOnLoad();
 }

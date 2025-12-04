@@ -5,10 +5,10 @@
 
 // 默认配置 - 默认使用 Google 翻译（免费），推荐 DeepSeek
 const DEFAULT_CONFIG = {
-  provider: 'google',  // 默认 Google 翻译，免费无需配置
-  apiEndpoint: '',
-  apiKey: '',
-  modelName: '',
+  provider: 'google',  // 默认免费 Google 翻译，无需配置即可使用
+  apiEndpoint: '',     // Google 翻译不需要
+  apiKey: '',          // Google 翻译不需要
+  modelName: '',       // Google 翻译不需要
   sourceLang: 'auto',  // 源语言：auto 自动检测，或指定语言代码
   targetLang: 'zh-CN',
   translationStyle: 'accurate',
@@ -1015,27 +1015,57 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 // 初始化时检查当前翻译状态
 async function checkCurrentTranslationState() {
+  const t = window.i18n.t;
+  
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (tab?.id) {
+    if (!tab?.id) return;
+    
+    let state = null;
+    
+    // 首先尝试从内容脚本获取状态
+    try {
       const response = await chrome.tabs.sendMessage(tab.id, { action: 'getTranslationState' });
       if (response) {
-        // 如果正在翻译，更新状态
-        if (response.isTranslating) {
-          setTranslatingState(true);
-        }
-        // 如果页面有已翻译的内容，显示恢复按钮
-        if (response.hasTranslations) {
-          showRestoreButton();
-          // 如果不在翻译中但有翻译内容，说明翻译已完成
-          if (!response.isTranslating) {
-            const t = window.i18n.t;
-            updateStatus('success', t('translateComplete'), `${response.translatedCount || 0} segments`);
-          }
-        }
+        state = response;
+      }
+    } catch (e) {
+      // 内容脚本可能未加载，尝试从 background 获取缓存状态
+      console.log('[Popup] Content script not available, trying background state');
+    }
+    
+    // 如果内容脚本没响应，尝试从 background 获取状态
+    if (!state) {
+      try {
+        state = await chrome.runtime.sendMessage({ action: 'getTabState', tabId: tab.id });
+      } catch (e) {
+        console.log('[Popup] Background state not available');
       }
     }
+    
+    // 应用状态到 UI
+    if (state) {
+      applyTranslationState(state);
+    }
   } catch (e) {
-    // 内容脚本可能未加载，忽略
+    console.error('[Popup] Error checking translation state:', e);
+  }
+}
+
+// 应用翻译状态到 UI
+function applyTranslationState(state) {
+  const t = window.i18n.t;
+  
+  if (state.isTranslating) {
+    setTranslatingState(true);
+    updateStatus('working', t('translating'), '');
+  } else if (state.hasTranslations) {
+    setTranslatingState(false);
+    showRestoreButton();
+    updateStatus('success', t('translateComplete'), `${state.translatedCount || 0} segments`);
+  } else {
+    setTranslatingState(false);
+    hideRestoreButton();
+    updateStatus('idle', t('ready'), t('readyDesc'));
   }
 }

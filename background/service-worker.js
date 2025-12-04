@@ -1,9 +1,58 @@
 /**
  * Open Immerse Translate - Service Worker
- * 后台服务脚本 - 带请求限流和重试机制
+ * 后台服务脚本 - 带请求限流、重试机制和 Tab 状态管理
  */
 
 console.log('[OpenImmerseTranslate] Service worker started');
+
+// ==================== Tab 状态管理 ====================
+// 使用 Map 存储每个 tab 的翻译状态
+const tabStates = new Map();
+
+// Tab 状态结构
+function createTabState() {
+  return {
+    isTranslating: false,
+    translatedCount: 0,
+    hasTranslations: false,
+    lastUpdated: Date.now()
+  };
+}
+
+// 获取 Tab 状态
+function getTabState(tabId) {
+  if (!tabStates.has(tabId)) {
+    tabStates.set(tabId, createTabState());
+  }
+  return tabStates.get(tabId);
+}
+
+// 更新 Tab 状态
+function updateTabState(tabId, updates) {
+  const state = getTabState(tabId);
+  Object.assign(state, updates, { lastUpdated: Date.now() });
+  tabStates.set(tabId, state);
+  console.log(`[OIT] Tab ${tabId} state updated:`, state);
+}
+
+// 清理 Tab 状态
+function clearTabState(tabId) {
+  tabStates.delete(tabId);
+  console.log(`[OIT] Tab ${tabId} state cleared`);
+}
+
+// 监听 Tab 关闭事件，清理状态
+chrome.tabs.onRemoved.addListener((tabId) => {
+  clearTabState(tabId);
+});
+
+// 监听 Tab 更新事件（页面导航）
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  // 当页面开始加载新 URL 时，重置状态
+  if (changeInfo.status === 'loading' && changeInfo.url) {
+    clearTabState(tabId);
+  }
+});
 
 // ==================== 请求限流器 ====================
 class RateLimiter {
@@ -87,7 +136,8 @@ function sleep(ms) {
 
 // ==================== 消息监听 ====================
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  console.log('[OpenImmerseTranslate] Background received:', message.action);
+  const tabId = sender.tab?.id;
+  console.log('[OpenImmerseTranslate] Background received:', message.action, 'from tab:', tabId);
   
   (async () => {
     try {
@@ -100,6 +150,53 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         case 'testApi':
           const testResult = await handleTestApi(message.config);
           sendResponse(testResult);
+          break;
+        
+        // Tab 状态管理
+        case 'updateTabState':
+          if (tabId) {
+            updateTabState(tabId, message.state);
+          }
+          sendResponse({ success: true });
+          break;
+          
+        case 'getTabState':
+          if (tabId) {
+            sendResponse(getTabState(tabId));
+          } else {
+            sendResponse(createTabState());
+          }
+          break;
+          
+        case 'clearTabState':
+          if (tabId) {
+            clearTabState(tabId);
+          }
+          sendResponse({ success: true });
+          break;
+          
+        // 转发翻译状态变化到所有监听者（popup）
+        case 'translationStateChanged':
+          if (tabId) {
+            updateTabState(tabId, {
+              isTranslating: message.isTranslating,
+              translatedCount: message.translatedCount,
+              hasTranslations: message.hasTranslations
+            });
+          }
+          // 继续广播消息（popup 会收到）
+          sendResponse({ success: true });
+          break;
+          
+        case 'translationComplete':
+          if (tabId) {
+            updateTabState(tabId, {
+              isTranslating: false,
+              translatedCount: message.count,
+              hasTranslations: true
+            });
+          }
+          sendResponse({ success: true });
           break;
           
         default:
