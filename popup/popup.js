@@ -320,8 +320,8 @@ const LANG_NAMES = {
 // DOM 元素
 let elements = {};
 
-// 当前状态
-let currentConfig = { ...DEFAULT_CONFIG };
+// 当前状态（注意：currentConfig 已在上方 ConfigManager 前声明）
+// let currentConfig 在第296行已声明
 let isTranslating = false;
 
 // 初始化
@@ -929,8 +929,9 @@ async function handleTranslatePage() {
     return;
   }
   
-  // Ollama 不需要 API Key，其他提供商需要
-  const needsApiKey = currentConfig.provider !== 'ollama';
+  // 检查当前 Provider 是否需要 API Key（Google 和 Ollama 不需要）
+  const providerConfig = PROVIDER_DEFAULTS[currentConfig.provider];
+  const needsApiKey = providerConfig?.needsApiKey !== false;
   if (needsApiKey && !currentConfig.apiKey) {
     showToast(t('pleaseConfigureApi'), 'error');
     logToConsole(t('errorApiKeyMissing'), 'error');
