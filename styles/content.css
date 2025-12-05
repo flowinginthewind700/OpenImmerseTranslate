@@ -34,24 +34,26 @@ blockquote .oit-wrapper {
 /* 翻译结果 - 沉浸式显示在原文下方 */
 .oit-translation {
   display: block;
-  color: #7c3aed;  /* 紫色，易于区分 */
-  font-size: 0.95em;
+  color: #666666;  /* 优雅的灰色 */
+  font-size: 0.92em;
   line-height: 1.6;
-  margin-top: 4px;
-  padding: 2px 0;
+  margin-top: 6px;
+  padding: 0;
   word-break: break-word;
+  font-style: normal;
+  letter-spacing: 0.01em;
 }
 
 /* 深色模式 - 自动适配 */
 @media (prefers-color-scheme: dark) {
   .oit-translation {
-    color: #a78bfa;  /* 浅紫色 */
+    color: #9ca3af;  /* 柔和的浅灰色 */
   }
 }
 
 /* 网站深色背景检测（通过背景色判断） */
 .oit-wrapper.oit-dark .oit-translation {
-  color: #a78bfa;
+  color: #9ca3af;
 }
 
 /* 仅显示翻译模式（隐藏原文） */
@@ -66,9 +68,17 @@ blockquote .oit-wrapper {
 h1 .oit-translation,
 h2 .oit-translation,
 h3 .oit-translation {
+  font-size: 0.88em;
+  font-weight: normal;
+  color: #888888;
+}
+
+h4 .oit-translation,
+h5 .oit-translation,
+h6 .oit-translation {
   font-size: 0.9em;
   font-weight: normal;
-  opacity: 0.9;
+  color: #777777;
 }
 
 /* 列表项特殊处理 */
@@ -80,14 +90,17 @@ li .oit-translation {
 a .oit-translation {
   display: inline;
   margin-left: 4px;
+  color: #888888;
 }
 
 a .oit-translation::before {
   content: '(';
+  color: #aaaaaa;
 }
 
 a .oit-translation::after {
   content: ')';
+  color: #aaaaaa;
 }
 
 /* 浮动翻译按钮 */
@@ -199,16 +212,17 @@ a .oit-translation::after {
 /* 翻译结果区域 */
 .oit-panel-translation {
   font-size: 15px;
-  color: #7c3aed;
+  color: #333333;
   line-height: 1.7;
   max-height: 150px;
   overflow-y: auto;
   word-break: break-word;
+  font-weight: 500;
 }
 
 @media (prefers-color-scheme: dark) {
   .oit-panel-translation {
-    color: #a78bfa;
+    color: #e5e7eb;
   }
 }
 
@@ -521,20 +535,20 @@ a .oit-translation::after {
   position: relative;
   text-decoration: underline;
   text-decoration-style: dotted;
-  text-decoration-color: rgba(124, 58, 237, 0.5);
+  text-decoration-color: rgba(100, 116, 139, 0.4);
   text-underline-offset: 3px;
 }
 
 /* 深色模式下的待翻译提示 */
 @media (prefers-color-scheme: dark) {
   .oit-pending {
-    text-decoration-color: rgba(167, 139, 250, 0.5);
+    text-decoration-color: rgba(148, 163, 184, 0.4);
   }
 }
 
 /* Twitter 等深色网站的适配 */
 .oit-pending-dark {
-  text-decoration-color: rgba(167, 139, 250, 0.6) !important;
+  text-decoration-color: rgba(148, 163, 184, 0.5) !important;
 }
 
 /* 翻译中状态 - 动画下划线 */
@@ -542,17 +556,17 @@ a .oit-translation::after {
   position: relative;
   text-decoration: underline;
   text-decoration-style: wavy;
-  text-decoration-color: rgba(0, 122, 255, 0.6);
+  text-decoration-color: rgba(59, 130, 246, 0.5);
   text-underline-offset: 3px;
   animation: oit-underline-pulse 1.2s ease-in-out infinite;
 }
 
 @keyframes oit-underline-pulse {
   0%, 100% {
-    text-decoration-color: rgba(0, 122, 255, 0.6);
+    text-decoration-color: rgba(59, 130, 246, 0.5);
   }
   50% {
-    text-decoration-color: rgba(0, 122, 255, 0.2);
+    text-decoration-color: rgba(59, 130, 246, 0.15);
   }
 }
 

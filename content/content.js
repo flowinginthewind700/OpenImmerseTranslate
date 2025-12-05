@@ -1080,15 +1080,15 @@ function applyTranslation(block, translation) {
     // 检测深色背景并设置颜色
     const isDark = isDarkBackground(element) || isDarkMode();
     if (isDark) {
-      translationEl.style.color = '#a78bfa';
+      translationEl.style.color = '#9ca3af';
     } else {
-      translationEl.style.color = '#7c3aed';
+      translationEl.style.color = '#666666';
     }
     
     translationEl.textContent = translation;
     translationEl.style.marginTop = '6px';
-    translationEl.style.fontSize = '0.95em';
-    translationEl.style.lineHeight = '1.5';
+    translationEl.style.fontSize = '0.92em';
+    translationEl.style.lineHeight = '1.55';
     translationEl.style.display = 'block';
     
     element.appendChild(translationEl);
@@ -1127,7 +1127,7 @@ function applyTranslation(block, translation) {
     const translationEl = document.createElement('span');
     translationEl.className = 'oit-translation';
     translationEl.textContent = ` ${translation}`;
-    translationEl.style.color = '#7c3aed';
+    translationEl.style.color = '#666666';
     parent.appendChild(translationEl);
     parent.classList.add('oit-wrapper');
   }
