@@ -476,6 +476,12 @@ async function translateSingle(block) {
     return;
   }
   
+  // 🔥 关键去重：检查元素或其父元素是否已被翻译
+  if (isAlreadyTranslated(block.element)) {
+    console.log('[OIT] Skipping already translated element');
+    return;
+  }
+  
   state.activeTranslations++;
   markAsTranslating(block.element);
   
@@ -739,9 +745,12 @@ function collectViewportBlocks() {
 
 /**
  * 收集指定选择器的文本元素
+ * 🔥 增强去重：记录已收集元素，防止父子元素重复
  */
 function collectElementsWithText(selectors, blocks, viewportHeight, seenInThisScan) {
   const elements = document.querySelectorAll(selectors);
+  // 记录本次已收集的元素（用于检查父子关系）
+  const collectedElements = new WeakSet();
   
   for (const el of elements) {
     if (blocks.length >= CONFIG.MAX_VIEWPORT_SCAN) break;
@@ -754,6 +763,9 @@ function collectElementsWithText(selectors, blocks, viewportHeight, seenInThisSc
     if (el.closest('.oit-wrapper') || el.classList.contains('oit-pending')) continue;
     if (el.closest('.oit-translation')) continue;
     if (state.completedElements.has(el)) continue;
+    
+    // 🔥 检查是否是已收集元素的子元素
+    if (isChildOfCollected(el, collectedElements)) continue;
     
     // 获取元素的完整文本内容（包括嵌套）
     const text = el.textContent?.trim();
@@ -775,19 +787,41 @@ function collectElementsWithText(selectors, blocks, viewportHeight, seenInThisSc
       const textNode = findTextNode(el, directText);
       if (textNode) {
         if (seenInThisScan) seenInThisScan.add(text);
+        if (seenInThisScan) seenInThisScan.add(directText); // 同时添加直接文本
+        collectedElements.add(el);
         blocks.push({ element: el, textNode, text: directText });
       }
     } else if (useAppendMode) {
       if (seenInThisScan) seenInThisScan.add(text);
+      collectedElements.add(el);
       blocks.push({ element: el, textNode: null, text, isAppend: true });
     }
   }
 }
 
 /**
+ * 检查元素是否是已收集元素的子元素
+ */
+function isChildOfCollected(element, collectedElements) {
+  let parent = element.parentElement;
+  while (parent && parent !== document.body) {
+    if (collectedElements.has(parent)) return true;
+    parent = parent.parentElement;
+  }
+  return false;
+}
+
+/**
  * 收集叶子文本节点（span/div 中没有更深子元素的）
+ * 🔥 增强去重：检查父元素是否已被收集
  */
 function collectLeafTextElements(blocks, viewportHeight, seenInThisScan) {
+  // 🔥 收集当前 blocks 中的所有元素，用于检查父子关系
+  const existingElements = new WeakSet();
+  for (const block of blocks) {
+    existingElements.add(block.element);
+  }
+  
   // 使用 TreeWalker 高效遍历文本节点
   const walker = document.createTreeWalker(
     document.body,
@@ -807,6 +841,15 @@ function collectLeafTextElements(blocks, viewportHeight, seenInThisScan) {
           return NodeFilter.FILTER_REJECT;
         }
         if (state.completedElements.has(parent)) return NodeFilter.FILTER_REJECT;
+        
+        // 🔥 检查父元素链是否已在本次扫描中被收集
+        let ancestor = parent;
+        while (ancestor && ancestor !== document.body) {
+          if (existingElements.has(ancestor)) {
+            return NodeFilter.FILTER_REJECT; // 父元素已被收集，跳过
+          }
+          ancestor = ancestor.parentElement;
+        }
         
         // 跳过不需要的标签
         if (CONFIG.SKIP_TAGS.has(parent.tagName)) return NodeFilter.FILTER_REJECT;
@@ -835,9 +878,47 @@ function collectLeafTextElements(blocks, viewportHeight, seenInThisScan) {
     // 🔥 只用本次扫描 Set 去重
     if (seenInThisScan && seenInThisScan.has(text)) continue;
     
+    // 🔥 再次检查父元素是否已被收集（动态更新的 blocks）
+    let shouldSkip = false;
+    for (const block of blocks) {
+      if (parent === block.element || parent.contains(block.element) || block.element.contains(parent)) {
+        shouldSkip = true;
+        break;
+      }
+    }
+    if (shouldSkip) continue;
+    
     if (seenInThisScan) seenInThisScan.add(text);
     blocks.push({ element: parent, textNode: node, text });
   }
+}
+
+/**
+ * 🔥 检查元素是否已被翻译（防止重复翻译）
+ * 检查：1. 元素本身 2. 父元素 3. 子元素
+ */
+function isAlreadyTranslated(element) {
+  if (!element) return true;
+  
+  // 1. 检查元素本身是否有翻译标记
+  if (element.classList?.contains('oit-wrapper')) return true;
+  if (element.querySelector?.('.oit-translation')) return true;
+  
+  // 2. 检查父元素链是否已被翻译
+  if (element.closest?.('.oit-wrapper')) return true;
+  
+  // 3. 检查 completedElements
+  if (state.completedElements.has(element)) return true;
+  
+  // 4. 检查父元素是否在 completedElements 中
+  let parent = element.parentElement;
+  while (parent && parent !== document.body) {
+    if (state.completedElements.has(parent)) return true;
+    if (parent.classList?.contains('oit-wrapper')) return true;
+    parent = parent.parentElement;
+  }
+  
+  return false;
 }
 
 /**
@@ -1230,10 +1311,17 @@ function applyTranslation(block, translation) {
   // 移除待翻译标记
   removePendingMark(element);
   
+  // 🔥 关键去重检查（防止重复翻译）
+  if (isAlreadyTranslated(element)) {
+    console.log('[OIT] Skipping duplicate translation for:', text?.substring(0, 30));
+    return;
+  }
+  
   // 追加模式：在元素后追加翻译（Twitter/嵌套文本等）
   if (isTwitter || isAppend || !textNode) {
-    // 检查是否已经翻译过
+    // 检查是否已经翻译过（更严格的检查）
     if (element.querySelector(':scope > .oit-translation')) return;
+    if (element.querySelector('.oit-translation')) return; // 检查任意后代
     
     const translationEl = document.createElement('div');
     translationEl.className = 'oit-translation';
