@@ -297,9 +297,11 @@ const ConfigManager = {
       translationStyle: global.translationStyle || 'accurate',
       showOriginal: global.showOriginal !== false,
       autoDetect: global.autoDetect !== false,
+      showFab: global.showFab !== false,  // 🔥 添加悬浮按钮配置
       customPrompt: global.customPrompt || '',
       maxTokens: global.maxTokens || 2048,
-      temperature: global.temperature || 0.3
+      temperature: global.temperature || 0.3,
+      uiLanguage: global.uiLanguage || ''  // 🔥 添加UI语言配置
     };
   },
   
@@ -401,6 +403,145 @@ let elements = {};
 // let currentConfig 在第296行已声明
 let isTranslating = false;
 
+// ==================== 状态同步管理器 ====================
+/**
+ * StateManager - 统一管理 Popup 和 Content Script 之间的状态同步
+ * 确保 FAB 开关和翻译状态的双向严格一致
+ */
+const StateManager = {
+  // 当前 tab ID 缓存
+  _currentTabId: null,
+  
+  /**
+   * 获取当前活动 tab
+   */
+  async getCurrentTab() {
+    try {
+      const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+      const tab = tabs?.[0];
+      if (tab?.id) {
+        this._currentTabId = tab.id;
+      }
+      return tab;
+    } catch (e) {
+      console.warn('[StateManager] Failed to get current tab:', e);
+      return null;
+    }
+  },
+  
+  /**
+   * 从 Content Script 获取完整状态
+   * @returns {Promise<{isTranslating: boolean, hasTranslations: boolean, fabVisible: boolean}>}
+   */
+  async getContentState() {
+    const tab = await this.getCurrentTab();
+    if (!tab?.id) return null;
+    
+    try {
+      const response = await Promise.race([
+        chrome.tabs.sendMessage(tab.id, { action: 'getTranslationState' }),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 2000))
+      ]);
+      return response || null;
+    } catch (e) {
+      // Content script 可能未加载
+      return null;
+    }
+  },
+  
+  /**
+   * 同步翻译状态到 UI
+   * 调用 setTranslatingState 来确保统一更新
+   * @param {boolean} translating - 是否正在翻译
+   */
+  syncTranslatingState(translating) {
+    // 使用统一的 setTranslatingState 函数
+    if (typeof setTranslatingState === 'function') {
+      setTranslatingState(translating);
+    } else {
+      // 回退方案
+      isTranslating = translating;
+    }
+  },
+  
+  /**
+   * 同步 FAB 开关状态到 UI
+   * @param {boolean} visible - FAB 是否可见
+   */
+  syncFabToggle(visible) {
+    if (elements.fabToggle) {
+      elements.fabToggle.checked = visible;
+    }
+  },
+  
+  /**
+   * 通知 Content Script 更新翻译状态
+   * @param {string} action - 'startTranslate' | 'stopTranslate'
+   */
+  async notifyTranslationChange(action) {
+    const tab = await this.getCurrentTab();
+    if (!tab?.id) return;
+    
+    try {
+      await chrome.tabs.sendMessage(tab.id, { action });
+    } catch (e) {
+      console.warn('[StateManager] Failed to notify content script:', e);
+    }
+  },
+  
+  /**
+   * 通知 Content Script 更新 FAB 显示状态
+   * @param {boolean} visible - 是否显示 FAB
+   */
+  async notifyFabChange(visible) {
+    const tab = await this.getCurrentTab();
+    if (!tab?.id) return;
+    
+    try {
+      await chrome.tabs.sendMessage(tab.id, { 
+        action: visible ? 'showFab' : 'hideFab'
+      });
+    } catch (e) {
+      // 静默处理 - content script 可能未加载
+    }
+  },
+  
+  /**
+   * 初始化时同步所有状态
+   */
+  async initSync() {
+    const t = window.i18n?.t || ((k) => k);
+    
+    // 1. 从存储加载 FAB 配置（确保持久化）
+    const fabVisible = currentConfig?.showFab !== false;
+    this.syncFabToggle(fabVisible);
+    
+    // 2. 尝试从 Content Script 获取实时翻译状态
+    const contentState = await this.getContentState();
+    
+    if (contentState) {
+      // 应用翻译状态
+      if (contentState.isTranslating) {
+        this.syncTranslatingState(true);
+        updateStatus('working', t('translating'), '');
+      } else if (contentState.hasTranslations) {
+        this.syncTranslatingState(false);
+        showRestoreButton();
+        updateStatus('success', t('translateComplete'), `${contentState.translatedCount || 0} segments`);
+      } else {
+        this.syncTranslatingState(false);
+        hideRestoreButton();
+      }
+    }
+    
+    console.log('[StateManager] Initialized:', { 
+      fabVisible, 
+      contentState,
+      isTranslating 
+    });
+  }
+};
+
 // 初始化
 document.addEventListener('DOMContentLoaded', async () => {
   initElements();
@@ -408,8 +549,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   applyI18n();
   initEventListeners();
   updateUI();
-  // 检查当前翻译状态（与悬浮按钮同步）
-  await checkCurrentTranslationState();
+  // 🔥 使用 StateManager 初始化状态同步
+  await StateManager.initSync();
 });
 
 // 应用国际化
@@ -1322,13 +1463,20 @@ function handleTranslationError(error, t) {
 }
 
 // 设置翻译状态
+/**
+ * 设置翻译状态（统一入口）
+ * 此函数同时更新：1. 内存状态 2. UI 显示
+ * 确保 Popup 和 FAB 状态一致
+ */
 function setTranslatingState(translating) {
   const t = window.i18n.t;
+  
+  // 更新内存状态
   isTranslating = translating;
   
+  // 更新 UI
   if (translating) {
     updateStatus('working', t('translating'), t('translatingDesc'));
-    // 更新按钮为"停止翻译"状态
     elements.translatePageBtn.innerHTML = `
       <svg viewBox="0 0 24 24" fill="none">
         <rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor"/>
@@ -1337,7 +1485,6 @@ function setTranslatingState(translating) {
     `;
     elements.translatePageBtn.classList.add('translating');
   } else {
-    // 恢复按钮为"开始翻译"状态
     elements.translatePageBtn.innerHTML = `
       <svg viewBox="0 0 24 24" fill="none">
         <path d="M12.87 15.07l-2.54-2.51.03-.03A17.52 17.52 0 0014.07 6H17V4h-7V2H8v2H1v2h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11.76-2.04zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2l-4.5-12zm-2.62 7l1.62-4.33L19.12 17h-3.24z" fill="currentColor"/>
@@ -1528,22 +1675,17 @@ async function handleSaveSettings() {
 // 处理 FAB 开关切换（主界面）
 async function handleFabToggle() {
   const newShowFab = elements.fabToggle.checked;
+  
+  // 1. 更新内存中的配置
   currentConfig.showFab = newShowFab;
   
-  // 直接使用 ConfigManager 保存 FAB 设置
+  // 2. 持久化保存到存储
   await ConfigManager.saveGlobal({ showFab: newShowFab });
   
-  // 通知内容脚本
-  try {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (tab?.id) {
-      chrome.tabs.sendMessage(tab.id, { 
-        action: newShowFab ? 'showFab' : 'hideFab' 
-      });
-    }
-  } catch (e) {
-    // 忽略错误
-  }
+  // 3. 通知 Content Script 更新 FAB 显示
+  await StateManager.notifyFabChange(newShowFab);
+  
+  console.log('[Popup] FAB toggle changed:', newShowFab);
 }
 
 // 显示Toast提示
@@ -1561,108 +1703,87 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const t = window.i18n.t;
   
   if (message.action === 'translationComplete') {
-    setTranslatingState(false);
+    // 🔥 使用 StateManager 同步状态
+    StateManager.syncTranslatingState(false);
     updateStatus('success', t('translateComplete'), `${message.count || 0} segments`);
     const completeMsg = t('consoleCompleted').replace('{count}', message.count || 0);
     logToConsole(completeMsg, 'success');
-    // 显示恢复按钮
     showRestoreButton();
+    
   } else if (message.action === 'translationError') {
-    setTranslatingState(false);
+    StateManager.syncTranslatingState(false);
     updateStatus('error', t('translateError'), message.error || '');
     const friendlyError = parseErrorMessage({ message: message.error });
     logToConsole(friendlyError, 'error');
     showToast(friendlyError, 'error');
+    
   } else if (message.action === 'translationProgress') {
+    // 确保翻译状态为 true
+    if (!isTranslating) {
+      StateManager.syncTranslatingState(true);
+    }
     updateStatus('working', t('translating'), `${message.current}/${message.total}`);
-    // 每5个进度更新一次日志，避免刷屏
     if (message.current % 5 === 0 || message.current === message.total) {
       const progressMsg = t('consoleTranslating')
         .replace('{current}', message.current)
         .replace('{total}', message.total);
       logToConsole(progressMsg, 'progress');
     }
+    
   } else if (message.action === 'translationStateChanged') {
-    // 🔥 同步 FAB 和 popup 之间的状态变化
+    // 🔥 FAB 和 Popup 之间的状态同步（来自 Content Script）
     if (message.status === 'translating') {
-      setTranslatingState(true);
+      StateManager.syncTranslatingState(true);
       updateStatus('working', t('translating'), '');
       logToConsole(t('consoleStarting'), 'info');
     } else if (message.status === 'stopped') {
-      setTranslatingState(false);
+      StateManager.syncTranslatingState(false);
       updateStatus('idle', t('stopped'), t('stoppedDesc'));
       logToConsole(t('consoleStopped'), 'warning');
-      // 检查是否有已翻译内容，如果有则显示恢复按钮
       if (message.hasTranslations) {
         showRestoreButton();
       } else {
         hideRestoreButton();
       }
     } else if (message.status === 'idle') {
-      // 恢复原样后的状态
-      setTranslatingState(false);
+      StateManager.syncTranslatingState(false);
       updateStatus('idle', t('ready'), t('readyDesc'));
       hideRestoreButton();
       logToConsole(t('consoleRestored') || '已恢复原样', 'info');
     }
+    
   } else if (message.action === 'consoleLog') {
-    // 直接从内容脚本发送的日志
     logToConsole(message.text, message.type || 'info');
+    
+  } else if (message.action === 'fabStateChanged') {
+    // 🔥 FAB 状态从 content script 同步过来（用户通过 FAB 关闭按钮关闭）
+    console.log('[Popup] FAB state changed from content:', message.showFab);
+    
+    // 更新 UI 开关
+    if (elements.fabToggle) {
+      elements.fabToggle.checked = message.showFab;
+    }
+    
+    // 更新内存配置
+    if (currentConfig) {
+      currentConfig.showFab = message.showFab;
+    }
   }
 });
 
-// 初始化时检查当前翻译状态
-async function checkCurrentTranslationState() {
-  const t = window.i18n.t;
-  
-  try {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (!tab?.id) return;
-    
-    let state = null;
-    
-    // 首先尝试从内容脚本获取状态
-    try {
-      const response = await chrome.tabs.sendMessage(tab.id, { action: 'getTranslationState' });
-      if (response) {
-        state = response;
-      }
-    } catch (e) {
-      // 内容脚本可能未加载，尝试从 background 获取缓存状态
-      console.log('[Popup] Content script not available, trying background state');
-    }
-    
-    // 如果内容脚本没响应，尝试从 background 获取状态
-    if (!state) {
-      try {
-        state = await chrome.runtime.sendMessage({ action: 'getTabState', tabId: tab.id });
-      } catch (e) {
-        console.log('[Popup] Background state not available');
-      }
-    }
-    
-    // 应用状态到 UI
-    if (state) {
-      applyTranslationState(state);
-    }
-  } catch (e) {
-    console.error('[Popup] Error checking translation state:', e);
-  }
-}
-
-// 应用翻译状态到 UI
+// 应用翻译状态到 UI（供 StateManager 使用）
 function applyTranslationState(state) {
   const t = window.i18n.t;
   
   if (state.isTranslating) {
-    setTranslatingState(true);
+    StateManager.syncTranslatingState(true);
     updateStatus('working', t('translating'), '');
   } else if (state.hasTranslations) {
-    setTranslatingState(false);
+    StateManager.syncTranslatingState(false);
     showRestoreButton();
     updateStatus('success', t('translateComplete'), `${state.translatedCount || 0} segments`);
   } else {
-    setTranslatingState(false);
+    StateManager.syncTranslatingState(false);
     hideRestoreButton();
     updateStatus('idle', t('ready'), t('readyDesc'));
   }

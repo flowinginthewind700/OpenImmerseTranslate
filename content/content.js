@@ -10,6 +10,146 @@
  * 5. 智能去重避免重复翻译
  */
 
+// ==================== 扩展上下文检查 ====================
+/**
+ * 检查扩展上下文是否有效
+ * 当扩展被重新加载/更新后，旧的 content script 的 chrome API 会失效
+ * @returns {boolean} 上下文是否有效
+ */
+function isExtensionContextValid() {
+  try {
+    // 尝试访问 chrome.runtime.id，如果上下文失效会抛出异常
+    return !!(chrome && chrome.runtime && chrome.runtime.id);
+  } catch (e) {
+    return false;
+  }
+}
+
+/**
+ * 安全地执行 chrome API 调用
+ * @param {Function} fn - 要执行的异步函数
+ * @param {*} fallbackValue - 上下文失效时的回退值
+ * @returns {Promise<*>}
+ */
+async function safeChrome(fn, fallbackValue = null) {
+  if (!isExtensionContextValid()) {
+    console.warn('[OIT] Extension context invalidated, please refresh the page');
+    showContextInvalidatedWarning();
+    return fallbackValue;
+  }
+  
+  try {
+    return await fn();
+  } catch (e) {
+    if (e.message?.includes('Extension context invalidated')) {
+      console.warn('[OIT] Extension context invalidated:', e.message);
+      showContextInvalidatedWarning();
+      return fallbackValue;
+    }
+    throw e; // 其他错误继续抛出
+  }
+}
+
+/**
+ * 显示上下文失效警告（只显示一次）
+ * 使用纯 DOM 操作，不依赖 chrome API
+ */
+let contextWarningShown = false;
+function showContextInvalidatedWarning() {
+  if (contextWarningShown) return;
+  contextWarningShown = true;
+  
+  console.log('[OIT] 扩展已更新，请刷新页面以继续使用翻译功能');
+  
+  try {
+    // 在 FAB tooltip 显示提示
+    if (fab) {
+      const tooltip = fab.querySelector('.oit-fab-tooltip');
+      if (tooltip) {
+        tooltip.textContent = '请刷新页面';
+        tooltip.style.opacity = '1';
+        tooltip.style.background = '#ef4444';
+        tooltip.style.color = 'white';
+      }
+      
+      // 禁用 FAB 按钮
+      const fabBtn = fab.querySelector('.oit-fab-btn');
+      if (fabBtn) {
+        fabBtn.style.opacity = '0.5';
+        fabBtn.style.pointerEvents = 'none';
+        fabBtn.style.cursor = 'not-allowed';
+      }
+    }
+    
+    // 创建一个临时的页面提示（纯 DOM，不依赖 chrome API）
+    if (!document.querySelector('.oit-context-warning')) {
+      const warning = document.createElement('div');
+      warning.className = 'oit-context-warning';
+      warning.innerHTML = `
+        <span>翻译扩展已更新，请</span>
+        <button onclick="location.reload()">刷新页面</button>
+        <span>继续使用</span>
+        <button class="close" onclick="this.parentElement.remove()">×</button>
+      `;
+      warning.style.cssText = `
+        position: fixed;
+        bottom: 20px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: #1f2937;
+        color: white;
+        padding: 12px 20px;
+        border-radius: 8px;
+        font-size: 14px;
+        z-index: 2147483647;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      `;
+      
+      // 设置按钮样式
+      const style = document.createElement('style');
+      style.textContent = `
+        .oit-context-warning button {
+          background: #3b82f6;
+          color: white;
+          border: none;
+          padding: 6px 12px;
+          border-radius: 4px;
+          cursor: pointer;
+          font-size: 14px;
+        }
+        .oit-context-warning button:hover {
+          background: #2563eb;
+        }
+        .oit-context-warning button.close {
+          background: transparent;
+          padding: 4px 8px;
+          font-size: 18px;
+          margin-left: 8px;
+        }
+        .oit-context-warning button.close:hover {
+          background: rgba(255,255,255,0.1);
+        }
+      `;
+      document.head.appendChild(style);
+      document.body.appendChild(warning);
+      
+      // 10秒后自动隐藏
+      setTimeout(() => {
+        warning.style.opacity = '0';
+        warning.style.transition = 'opacity 0.3s';
+        setTimeout(() => warning.remove(), 300);
+      }, 10000);
+    }
+  } catch (e) {
+    // 即使 DOM 操作失败也不要崩溃
+    console.error('[OIT] Failed to show warning:', e);
+  }
+}
+
 // ==================== 配置常量 ====================
 const CONFIG = {
   // 视口检测
@@ -170,8 +310,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   return true;
 });
 
-// 广播翻译状态变化
+// 广播翻译状态变化（安全版本）
 function broadcastState(status) {
+  // 先检查上下文
+  if (!isExtensionContextValid()) return;
+  
   try {
     // 检查页面是否有已翻译的内容
     const hasTranslations = document.querySelectorAll('.oit-wrapper').length > 0;
@@ -181,23 +324,28 @@ function broadcastState(status) {
       isTranslating: state.isActive,
       hasTranslations: hasTranslations,
       translatedCount: state.translatedCount
+    }).catch(() => {
+      // popup 可能已关闭或上下文失效，忽略错误
     });
   } catch (e) {
-    // popup 可能已关闭，忽略错误
+    // 忽略错误
   }
 }
 
 // 发送日志到 popup 控制台
 function sendLog(text, type = 'info') {
   console.log(`[OpenImmerseTranslate] ${type.toUpperCase()}: ${text}`);
+  // 检查上下文
+  if (!isExtensionContextValid()) return;
+  
   try {
     chrome.runtime.sendMessage({
       action: 'consoleLog',
       text: text,
       type: type
-    });
+    }).catch(() => {});
   } catch (e) {
-    // popup 可能已关闭，忽略
+    // popup 可能已关闭或上下文失效，忽略
   }
 }
 
@@ -321,6 +469,13 @@ async function processQueue() {
  * 单条翻译（异步，不阻塞）
  */
 async function translateSingle(block) {
+  // 🔥 检查扩展上下文
+  if (!isExtensionContextValid()) {
+    showContextInvalidatedWarning();
+    stopTranslation();
+    return;
+  }
+  
   state.activeTranslations++;
   markAsTranslating(block.element);
   
@@ -355,6 +510,12 @@ async function translateSingle(block) {
     state.completedElements.add(block.element);
     
   } catch (error) {
+    // 🔥 检查是否是上下文失效错误
+    if (error.message?.includes('Extension context invalidated')) {
+      showContextInvalidatedWarning();
+      stopTranslation();
+      return;
+    }
     console.error('[OIT] Translation failed:', error);
     removePendingMark(block.element);
   } finally {
@@ -1244,35 +1405,47 @@ function removeAllTranslations() {
 
 function notifyComplete() {
   const hasTranslations = document.querySelectorAll('.oit-wrapper').length > 0;
-  chrome.runtime.sendMessage({
-    action: 'translationComplete',
-    count: state.translatedCount,
-    hasTranslations: hasTranslations
-  });
   state.isActive = false;
+  
   // 更新 FAB 状态
   if (typeof updateFabStatus === 'function') {
     updateFabStatus('completed');
   }
+  
+  // 安全发送消息
+  if (isExtensionContextValid()) {
+    chrome.runtime.sendMessage({
+      action: 'translationComplete',
+      count: state.translatedCount,
+      hasTranslations: hasTranslations
+    }).catch(() => {});
+  }
 }
 
 function notifyError(error) {
-  chrome.runtime.sendMessage({
-    action: 'translationError',
-    error: error
-  });
   // 更新 FAB 状态
   if (typeof updateFabStatus === 'function') {
     updateFabStatus('error');
   }
+  
+  // 安全发送消息
+  if (isExtensionContextValid()) {
+    chrome.runtime.sendMessage({
+      action: 'translationError',
+      error: error
+    }).catch(() => {});
+  }
 }
 
 function notifyProgress(current, total) {
-  chrome.runtime.sendMessage({
-    action: 'translationProgress',
-    current: current,
-    total: total
-  });
+  // 安全发送消息
+  if (isExtensionContextValid()) {
+    chrome.runtime.sendMessage({
+      action: 'translationProgress',
+      current: current,
+      total: total
+    }).catch(() => {});
+  }
 }
 
 // ==================== 选中文本翻译 ====================
@@ -1324,6 +1497,12 @@ function hideFloating() {
 }
 
 async function translateSelection(text, x, y) {
+  // 🔥 检查扩展上下文
+  if (!isExtensionContextValid()) {
+    showContextInvalidatedWarning();
+    return;
+  }
+  
   hideFloating();
   
   floatingPanel = document.createElement('div');
@@ -1334,10 +1513,12 @@ async function translateSelection(text, x, y) {
   document.body.appendChild(floatingPanel);
   
   try {
-    const result = await chrome.storage.sync.get('config');
-    const config = result.config || {};
+    // 🔥 使用新配置系统
+    const config = await loadFullConfig();
     
-    if (!config.apiKey) {
+    // 检查是否需要 API Key
+    const needsApiKey = checkNeedsApiKey(config.provider);
+    if (needsApiKey && !config.apiKey) {
       floatingPanel.innerHTML = `<div class="oit-panel-error">请先在插件设置中配置 API 密钥</div>`;
       return;
     }
@@ -1370,7 +1551,15 @@ async function translateSelection(text, x, y) {
     floatingPanel.querySelector('.oit-close-btn').onclick = hideFloating;
     
   } catch (error) {
-    floatingPanel.innerHTML = `<div class="oit-panel-error">${escapeHtml(error.message)}</div>`;
+    // 🔥 检查上下文失效错误
+    if (error.message?.includes('Extension context invalidated')) {
+      showContextInvalidatedWarning();
+      if (floatingPanel) {
+        floatingPanel.innerHTML = `<div class="oit-panel-error">请刷新页面后重试</div>`;
+      }
+    } else {
+      floatingPanel.innerHTML = `<div class="oit-panel-error">${escapeHtml(error.message)}</div>`;
+    }
   }
 }
 
@@ -1391,9 +1580,18 @@ function initFAB() {
   // 避免重复创建
   if (document.querySelector('.oit-fab')) return;
   
-  // 从存储中获取位置
-  chrome.storage.local.get('fabPosition', (result) => {
-    const position = result.fabPosition || { right: 20, top: '50%' };
+  // 检查上下文
+  if (!isExtensionContextValid()) {
+    console.log('[OIT] Context invalid, skipping FAB init');
+    return;
+  }
+  
+  // 从存储中获取位置（安全版本）
+  safeChrome(
+    () => chrome.storage.local.get('fabPosition'),
+    { fabPosition: null }
+  ).then(result => {
+    const position = result?.fabPosition || { right: 20, top: '50%' };
     createFAB(position);
   });
 }
@@ -1433,15 +1631,27 @@ function createFAB(position) {
   const fabBtn = fab.querySelector('.oit-fab-btn');
   const closeBtn = fab.querySelector('.oit-fab-close');
   
+  // 🔥 包装函数：在执行前检查上下文
+  const safeHandler = (fn) => {
+    return (e) => {
+      // 检查上下文是否有效
+      if (!isExtensionContextValid()) {
+        cleanupInvalidContext();
+        return;
+      }
+      fn(e);
+    };
+  };
+  
   // 点击翻译
-  fabBtn.addEventListener('click', (e) => {
+  fabBtn.addEventListener('click', safeHandler((e) => {
     if (!fabState.hasMoved) {
       handleFabClick();
     }
     fabState.hasMoved = false;
-  });
+  }));
   
-  // 拖拽功能
+  // 拖拽功能 - 不需要 chrome API，但为了一致性也添加检查
   fabBtn.addEventListener('mousedown', startDrag);
   document.addEventListener('mousemove', onDrag);
   document.addEventListener('mouseup', endDrag);
@@ -1451,11 +1661,11 @@ function createFAB(position) {
   document.addEventListener('touchmove', onDrag, { passive: false });
   document.addEventListener('touchend', endDrag);
   
-  // 关闭按钮
-  closeBtn.addEventListener('click', (e) => {
+  // 关闭按钮 - 🔥 使用 closeFabByUser 保存用户偏好
+  closeBtn.addEventListener('click', safeHandler((e) => {
     e.stopPropagation();
-    hideFAB();
-  });
+    closeFabByUser(); // 会同步保存配置
+  }));
   
   // 3秒后变成迷你模式
   setTimeout(() => {
@@ -1466,7 +1676,7 @@ function createFAB(position) {
   
   // 鼠标进入时取消迷你模式
   fab.addEventListener('mouseenter', () => {
-    fab.classList.remove('mini');
+    if (fab) fab.classList.remove('mini');
   });
   
   // 鼠标离开后恢复迷你模式
@@ -1479,6 +1689,22 @@ function createFAB(position) {
       }, 2000);
     }
   });
+}
+
+/**
+ * 清理失效上下文 - 移除 FAB 并提示用户
+ */
+function cleanupInvalidContext() {
+  console.log('[OIT] Cleaning up invalid context...');
+  
+  // 显示警告
+  showContextInvalidatedWarning();
+  
+  // 停止任何正在进行的翻译
+  if (state.isActive) {
+    state.isActive = false;
+    state.shouldStop = true;
+  }
 }
 
 // 开始拖拽
@@ -1569,14 +1795,22 @@ function endDrag(e) {
   
   position.top = rect.top;
   
-  // 保存位置
-  chrome.storage.local.set({ fabPosition: position });
+  // 保存位置（安全版本）
+  safeChrome(() => chrome.storage.local.set({ fabPosition: position }));
 }
 
 // 点击悬浮按钮
 async function handleFabClick() {
-  const fabBtn = fab.querySelector('.oit-fab-btn');
-  const tooltip = fab.querySelector('.oit-fab-tooltip');
+  // 🔥 首先检查扩展上下文是否有效
+  if (!isExtensionContextValid()) {
+    showContextInvalidatedWarning();
+    return;
+  }
+  
+  const fabBtn = fab?.querySelector('.oit-fab-btn');
+  const tooltip = fab?.querySelector('.oit-fab-tooltip');
+  
+  if (!fabBtn || !tooltip) return;
   
   // 如果正在翻译，停止
   if (state.isActive) {
@@ -1587,28 +1821,158 @@ async function handleFabClick() {
     return;
   }
   
-  // 获取配置
-  const result = await chrome.storage.sync.get('config');
-  const config = result.config || {};
+  try {
+    // 🔥 使用新的配置系统加载配置（与 popup 保持一致）
+    const config = await loadFullConfig();
+    
+    // 再次检查上下文（loadFullConfig 可能因上下文失效返回默认配置）
+    if (!isExtensionContextValid()) {
+      showContextInvalidatedWarning();
+      return;
+    }
+    
+    // 🔥 检查是否需要 API Key（Google 和 Ollama 不需要）
+    const needsApiKey = checkNeedsApiKey(config.provider);
+    
+    if (needsApiKey && !config.apiKey) {
+      // 显示提示
+      tooltip.textContent = '请先配置 API';
+      tooltip.style.opacity = '1';
+      setTimeout(() => {
+        if (fab) {
+          tooltip.style.opacity = '';
+          tooltip.textContent = '翻译页面';
+        }
+      }, 2000);
+      return;
+    }
+    
+    // 开始翻译
+    setFabToTranslating();
+    
+    startTranslation(config);
+    
+    // 通知 popup 状态变化
+    broadcastState('translating');
+    
+  } catch (e) {
+    console.error('[OIT] FAB click error:', e);
+    
+    // 检查是否是上下文失效错误
+    if (e.message?.includes('Extension context invalidated')) {
+      showContextInvalidatedWarning();
+    } else {
+      // 其他错误显示在 tooltip
+      tooltip.textContent = '出错了';
+      tooltip.style.opacity = '1';
+      setTimeout(() => {
+        if (fab) {
+          tooltip.style.opacity = '';
+          tooltip.textContent = '翻译页面';
+        }
+      }, 2000);
+    }
+  }
+}
+
+/**
+ * 加载完整配置（与 popup 中的 ConfigManager.getCurrentFullConfig 保持一致）
+ * 使用 safeChrome 包装器确保健壮性
+ */
+async function loadFullConfig() {
+  const result = await safeChrome(
+    () => chrome.storage.sync.get(['globalConfig', 'providerConfigs']),
+    {} // 回退空对象
+  );
   
-  if (!config.apiKey) {
-    // 显示提示
-    tooltip.textContent = '请先配置 API';
-    tooltip.style.opacity = '1';
-    setTimeout(() => {
-      tooltip.style.opacity = '';
-      tooltip.textContent = '翻译页面';
-    }, 2000);
-    return;
+  if (!result) {
+    // 上下文失效，返回默认 Google 配置
+    return getDefaultConfig();
   }
   
-  // 开始翻译
-  setFabToTranslating();
+  const globalConfig = result.globalConfig || {};
+  const providerConfigs = result.providerConfigs || {};
   
-  startTranslation(config);
+  const provider = globalConfig.provider || 'google';
+  const providerConfig = providerConfigs[provider] || {};
   
-  // 通知 popup 状态变化
-  broadcastState('translating');
+  // 返回与 popup 一致的配置格式
+  return {
+    provider: provider,
+    apiEndpoint: providerConfig.endpoint || getDefaultEndpoint(provider),
+    apiKey: providerConfig.apiKey || '',
+    modelName: providerConfig.model || getDefaultModel(provider),
+    sourceLang: globalConfig.sourceLang || 'auto',
+    targetLang: globalConfig.targetLang || 'zh-CN',
+    translationStyle: globalConfig.translationStyle || 'accurate',
+    showOriginal: globalConfig.showOriginal !== false,
+    autoDetect: globalConfig.autoDetect !== false,
+    customPrompt: globalConfig.customPrompt || '',
+    maxTokens: globalConfig.maxTokens || 2048,
+    temperature: globalConfig.temperature || 0.3
+  };
+}
+
+/**
+ * 获取默认配置（当无法读取存储时使用）
+ */
+function getDefaultConfig() {
+  return {
+    provider: 'google',
+    apiEndpoint: '',
+    apiKey: '',
+    modelName: '',
+    sourceLang: 'auto',
+    targetLang: 'zh-CN',
+    translationStyle: 'accurate',
+    showOriginal: true,
+    autoDetect: true,
+    customPrompt: '',
+    maxTokens: 2048,
+    temperature: 0.3
+  };
+}
+
+/**
+ * 获取 provider 默认 endpoint
+ */
+function getDefaultEndpoint(provider) {
+  const defaults = {
+    google: '',
+    deepseek: 'https://api.deepseek.com/v1/chat/completions',
+    openai: 'https://api.openai.com/v1/chat/completions',
+    anthropic: 'https://api.anthropic.com/v1/messages',
+    moonshot: 'https://api.moonshot.cn/v1/chat/completions',
+    zhipu: 'https://open.bigmodel.cn/api/paas/v4/chat/completions',
+    ollama: 'http://localhost:11434/api/chat',
+    custom: ''
+  };
+  return defaults[provider] || '';
+}
+
+/**
+ * 获取 provider 默认 model
+ */
+function getDefaultModel(provider) {
+  const defaults = {
+    google: '',
+    deepseek: 'deepseek-chat',
+    openai: 'gpt-4o-mini',
+    anthropic: 'claude-3-haiku-20240307',
+    moonshot: 'moonshot-v1-8k',
+    zhipu: 'glm-4-flash',
+    ollama: 'qwen3',
+    custom: ''
+  };
+  return defaults[provider] || '';
+}
+
+/**
+ * 检查 provider 是否需要 API Key
+ */
+function checkNeedsApiKey(provider) {
+  // Google 和 Ollama 不需要 API Key
+  return provider !== 'google' && provider !== 'ollama';
 }
 
 // 设置悬浮按钮为翻译中状态
@@ -1638,6 +2002,41 @@ function hideFAB() {
     fab = null;
   }
   console.log('[OIT] FAB hidden');
+}
+
+/**
+ * 🔥 用户主动关闭 FAB（通过 FAB 上的关闭按钮）
+ * 这会同步保存配置，使所有页面都不显示 FAB
+ */
+async function closeFabByUser() {
+  console.log('[OIT] User closed FAB, saving preference');
+  
+  // 1. 移除当前 FAB
+  hideFAB();
+  
+  // 2. 保存配置到存储（所有页面生效）
+  if (isExtensionContextValid()) {
+    try {
+      // 读取现有配置
+      const result = await chrome.storage.sync.get('globalConfig');
+      const globalConfig = result.globalConfig || {};
+      
+      // 更新 showFab 配置
+      globalConfig.showFab = false;
+      
+      // 保存
+      await chrome.storage.sync.set({ globalConfig });
+      console.log('[OIT] FAB preference saved: hidden');
+      
+      // 3. 通知 popup 更新 UI（如果打开的话）
+      chrome.runtime.sendMessage({
+        action: 'fabStateChanged',
+        showFab: false
+      }).catch(() => {});
+    } catch (e) {
+      console.error('[OIT] Failed to save FAB preference:', e);
+    }
+  }
 }
 
 // 显示悬浮按钮
@@ -1703,17 +2102,35 @@ function updateFabStatus(status) {
   }
 }
 
-// 检查是否应该显示 FAB
+// 检查是否应该显示 FAB（使用新配置系统）
 async function shouldShowFab() {
+  // 先检查上下文
+  if (!isExtensionContextValid()) {
+    console.log('[OIT] Extension context invalid, not showing FAB');
+    return false;
+  }
+  
   try {
-    const syncResult = await chrome.storage.sync.get('config');
-    // 默认显示，除非明确设置为 false
-    if (syncResult.config && syncResult.config.showFab === false) {
-      return false;
+    const result = await chrome.storage.sync.get(['globalConfig', 'config']);
+    
+    // 新配置系统
+    if (result.globalConfig && typeof result.globalConfig.showFab === 'boolean') {
+      console.log('[OIT] FAB config from globalConfig:', result.globalConfig.showFab);
+      return result.globalConfig.showFab;
     }
+    
+    // 兼容旧配置
+    if (result.config && typeof result.config.showFab === 'boolean') {
+      console.log('[OIT] FAB config from old config:', result.config.showFab);
+      return result.config.showFab;
+    }
+    
+    // 🔥 默认显示（新安装或未设置时）
+    console.log('[OIT] FAB config not found, defaulting to true');
     return true;
   } catch (e) {
-    console.log('[OIT] Error checking FAB setting:', e);
+    console.log('[OIT] Error reading FAB config:', e);
+    // 出错时也默认显示
     return true;
   }
 }
