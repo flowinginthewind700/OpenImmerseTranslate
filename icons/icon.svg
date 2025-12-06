@@ -1,51 +1,33 @@
+<!-- 候选6: 地球 + 语言符号 - 国际化风格 -->
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
   <defs>
-    <!-- 主渐变 - 苹果蓝到紫 -->
-    <linearGradient id="mainGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" style="stop-color:#007AFF"/>
-      <stop offset="100%" style="stop-color:#AF52DE"/>
+    <linearGradient id="grad6" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0EA5E9;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#0284C7;stop-opacity:1" />
     </linearGradient>
-    
-    <!-- 背景渐变 -->
-    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" style="stop-color:#007AFF"/>
-      <stop offset="50%" style="stop-color:#5856D6"/>
-      <stop offset="100%" style="stop-color:#AF52DE"/>
-    </linearGradient>
-    
-    <!-- 光泽效果 -->
-    <linearGradient id="shineGrad" x1="0%" y1="0%" x2="0%" y2="100%">
-      <stop offset="0%" style="stop-color:rgba(255,255,255,0.3)"/>
-      <stop offset="50%" style="stop-color:rgba(255,255,255,0)"/>
+    <linearGradient id="globe6" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#ffffff;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#e0f2fe;stop-opacity:1" />
     </linearGradient>
   </defs>
   
-  <!-- 圆角背景 -->
-  <rect x="4" y="4" width="120" height="120" rx="28" fill="url(#bgGrad)"/>
+  <!-- 背景 -->
+  <rect x="4" y="4" width="120" height="120" rx="24" fill="url(#grad6)"/>
   
-  <!-- 光泽层 -->
-  <rect x="4" y="4" width="120" height="60" rx="28" fill="url(#shineGrad)"/>
+  <!-- 地球主体 -->
+  <circle cx="58" cy="64" r="36" fill="url(#globe6)"/>
   
-  <!-- 翻译符号 - 简化的双语对照设计 -->
-  <g fill="white">
-    <!-- 左上: 英文 A -->
-    <path d="M32 32h12l16 40h-10l-3-8H35l-3 8H22l16-40h-6zm5 24h10l-5-14-5 14z" opacity="0.95"/>
-    
-    <!-- 右下: 中文"文" -->
-    <path d="M68 56h28v6H82v6h12v6H82v14h-8V74H62v-6h12v-6H60v-6h8z" opacity="0.95"/>
-    
-    <!-- 中间连接箭头 - 双向流动 -->
-    <g opacity="0.9">
-      <!-- 向右箭头 -->
-      <path d="M52 52l8 8-8 8v-5H42v-6h10v-5z"/>
-      <!-- 向左箭头 -->
-      <path d="M76 76l-8-8 8-8v5h10v6H76v5z"/>
-    </g>
-  </g>
+  <!-- 地球经纬线 -->
+  <ellipse cx="58" cy="64" rx="14" ry="36" fill="none" stroke="#0284C7" stroke-width="2" opacity="0.4"/>
+  <ellipse cx="58" cy="64" rx="28" ry="36" fill="none" stroke="#0284C7" stroke-width="2" opacity="0.3"/>
+  <line x1="22" y1="64" x2="94" y2="64" stroke="#0284C7" stroke-width="2" opacity="0.4"/>
+  <path d="M 26 48 Q 58 42, 90 48" fill="none" stroke="#0284C7" stroke-width="2" opacity="0.3"/>
+  <path d="M 26 80 Q 58 86, 90 80" fill="none" stroke="#0284C7" stroke-width="2" opacity="0.3"/>
   
-  <!-- 底部装饰线 - 表示沉浸式对照 -->
-  <g stroke="white" stroke-width="3" stroke-linecap="round" opacity="0.6">
-    <line x1="24" y1="100" x2="56" y2="100"/>
-    <line x1="72" y1="100" x2="104" y2="100"/>
-  </g>
+  <!-- 翻译标签徽章 -->
+  <circle cx="90" cy="90" r="22" fill="white" stroke="#0284C7" stroke-width="2"/>
+  <text x="90" y="86" font-family="Georgia, serif" font-size="12" font-weight="bold" fill="#0284C7" text-anchor="middle">A</text>
+  <line x1="80" y1="90" x2="100" y2="90" stroke="#0284C7" stroke-width="1.5"/>
+  <text x="90" y="102" font-family="Arial, sans-serif" font-size="11" font-weight="bold" fill="#0284C7" text-anchor="middle">文</text>
 </svg>
+
