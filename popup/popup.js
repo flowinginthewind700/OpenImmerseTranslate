@@ -101,15 +101,41 @@ const ConfigManager = {
   STORAGE_KEY_GLOBAL: 'globalConfig',
   STORAGE_KEY_PROVIDERS: 'providerConfigs',
   
-  // 内存缓存
-  _globalConfig: null,
-  _providerConfigs: null,
+  // 内存缓存（使用空对象而非 null，避免展开操作出错）
+  _globalConfig: { ...DEFAULT_GLOBAL_CONFIG },
+  _providerConfigs: {},
+  _initialized: false,
   
   /**
    * 初始化配置
    */
   async init() {
+    if (this._initialized) return;
     await this.load();
+    this._initialized = true;
+  },
+  
+  /**
+   * 确保已初始化
+   */
+  _ensureInitialized() {
+    if (!this._globalConfig) {
+      this._globalConfig = { ...DEFAULT_GLOBAL_CONFIG };
+    }
+    if (!this._providerConfigs) {
+      this._providerConfigs = {};
+    }
+  },
+  
+  /**
+   * 安全获取对象属性
+   */
+  _safeGet(obj, key, defaultValue = {}) {
+    if (obj === null || obj === undefined) return defaultValue;
+    const value = obj[key];
+    if (value === null || value === undefined) return defaultValue;
+    if (typeof value !== 'object') return defaultValue;
+    return value;
   },
   
   /**
@@ -122,23 +148,26 @@ const ConfigManager = {
         this.STORAGE_KEY_PROVIDERS
       ]);
       
-      // 全局配置
+      // 安全获取存储的全局配置
+      const savedGlobal = this._safeGet(result, this.STORAGE_KEY_GLOBAL, {});
       this._globalConfig = {
         ...DEFAULT_GLOBAL_CONFIG,
-        ...(result[this.STORAGE_KEY_GLOBAL] || {})
+        ...savedGlobal
       };
       
-      // Provider 配置（每个 provider 独立存储）
+      // 安全获取存储的 Provider 配置
+      const savedProviders = this._safeGet(result, this.STORAGE_KEY_PROVIDERS, {});
       this._providerConfigs = {};
-      const savedProviders = result[this.STORAGE_KEY_PROVIDERS] || {};
       
       // 合并默认配置和已保存的配置
       for (const [providerId, defaults] of Object.entries(PROVIDER_DEFAULTS)) {
+        if (!defaults) continue; // 跳过无效的 provider
+        const savedProvider = this._safeGet(savedProviders, providerId, {});
         this._providerConfigs[providerId] = {
-          endpoint: defaults.endpoint,
-          model: defaults.model,
+          endpoint: defaults.endpoint || '',
+          model: defaults.model || '',
           apiKey: '',
-          ...(savedProviders[providerId] || {})
+          ...savedProvider
         };
       }
       
@@ -158,7 +187,14 @@ const ConfigManager = {
    * 保存全局配置
    */
   async saveGlobal(config) {
-    this._globalConfig = { ...this._globalConfig, ...config };
+    this._ensureInitialized();
+    if (!config || typeof config !== 'object') return;
+    
+    this._globalConfig = { 
+      ...DEFAULT_GLOBAL_CONFIG,
+      ...this._globalConfig, 
+      ...config 
+    };
     await chrome.storage.sync.set({
       [this.STORAGE_KEY_GLOBAL]: this._globalConfig
     });
@@ -168,13 +204,24 @@ const ConfigManager = {
    * 保存单个 Provider 配置
    */
   async saveProvider(providerId, config) {
+    this._ensureInitialized();
+    if (!providerId || !config || typeof config !== 'object') return;
+    
+    // 确保 provider 存在于配置中
     if (!this._providerConfigs[providerId]) {
-      this._providerConfigs[providerId] = {};
+      const defaults = PROVIDER_DEFAULTS[providerId] || PROVIDER_DEFAULTS.custom || {};
+      this._providerConfigs[providerId] = {
+        endpoint: defaults.endpoint || '',
+        model: defaults.model || '',
+        apiKey: ''
+      };
     }
+    
     this._providerConfigs[providerId] = {
       ...this._providerConfigs[providerId],
       ...config
     };
+    
     await chrome.storage.sync.set({
       [this.STORAGE_KEY_PROVIDERS]: this._providerConfigs
     });
@@ -184,6 +231,7 @@ const ConfigManager = {
    * 获取全局配置
    */
   getGlobal() {
+    this._ensureInitialized();
     return { ...this._globalConfig };
   },
   
@@ -191,6 +239,7 @@ const ConfigManager = {
    * 获取当前 Provider ID
    */
   getCurrentProvider() {
+    this._ensureInitialized();
     return this._globalConfig?.provider || 'google';
   },
   
@@ -198,6 +247,7 @@ const ConfigManager = {
    * 设置当前 Provider
    */
   async setCurrentProvider(providerId) {
+    if (!providerId) return;
     await this.saveGlobal({ provider: providerId });
   },
   
@@ -205,15 +255,27 @@ const ConfigManager = {
    * 获取 Provider 配置
    */
   getProviderConfig(providerId) {
-    const defaults = PROVIDER_DEFAULTS[providerId] || PROVIDER_DEFAULTS.custom;
-    const saved = this._providerConfigs?.[providerId] || {};
+    this._ensureInitialized();
+    
+    // 安全获取默认配置
+    const defaults = PROVIDER_DEFAULTS[providerId] || PROVIDER_DEFAULTS.custom || {
+      endpoint: '',
+      model: '',
+      needsApiKey: true,
+      hintKey: 'hintCustom',
+      displayName: 'Custom'
+    };
+    
+    // 安全获取已保存的配置
+    const saved = this._safeGet(this._providerConfigs, providerId, {});
+    
     return {
-      endpoint: saved.endpoint || defaults.endpoint,
-      model: saved.model || defaults.model,
+      endpoint: saved.endpoint || defaults.endpoint || '',
+      model: saved.model || defaults.model || '',
       apiKey: saved.apiKey || '',
-      needsApiKey: defaults.needsApiKey,
-      hintKey: defaults.hintKey,
-      displayName: defaults.displayName
+      needsApiKey: defaults.needsApiKey !== false,
+      hintKey: defaults.hintKey || 'hintCustom',
+      displayName: defaults.displayName || providerId
     };
   },
   
@@ -221,21 +283,23 @@ const ConfigManager = {
    * 获取当前完整配置（用于翻译）
    */
   getCurrentFullConfig() {
+    this._ensureInitialized();
     const global = this.getGlobal();
-    const provider = this.getProviderConfig(global.provider);
+    const provider = this.getProviderConfig(global.provider || 'google');
+    
     return {
-      provider: global.provider,
-      apiEndpoint: provider.endpoint,
-      apiKey: provider.apiKey,
-      modelName: provider.model,
-      sourceLang: global.sourceLang,
-      targetLang: global.targetLang,
-      translationStyle: global.translationStyle,
-      showOriginal: global.showOriginal,
-      autoDetect: global.autoDetect,
-      customPrompt: global.customPrompt,
-      maxTokens: global.maxTokens,
-      temperature: global.temperature
+      provider: global.provider || 'google',
+      apiEndpoint: provider.endpoint || '',
+      apiKey: provider.apiKey || '',
+      modelName: provider.model || '',
+      sourceLang: global.sourceLang || 'auto',
+      targetLang: global.targetLang || 'zh-CN',
+      translationStyle: global.translationStyle || 'accurate',
+      showOriginal: global.showOriginal !== false,
+      autoDetect: global.autoDetect !== false,
+      customPrompt: global.customPrompt || '',
+      maxTokens: global.maxTokens || 2048,
+      temperature: global.temperature || 0.3
     };
   },
   
@@ -255,39 +319,52 @@ const ConfigManager = {
   async migrateOldConfig() {
     try {
       const result = await chrome.storage.sync.get('config');
-      if (result.config) {
-        const old = result.config;
-        
-        // 迁移全局配置
-        await this.saveGlobal({
-          provider: old.provider || 'google',
-          sourceLang: old.sourceLang || 'auto',
-          targetLang: old.targetLang || 'zh-CN',
-          translationStyle: old.translationStyle || 'accurate',
-          showOriginal: old.showOriginal !== false,
-          autoDetect: old.autoDetect !== false,
-          showFab: old.showFab !== false,
-          customPrompt: old.customPrompt || '',
-          maxTokens: old.maxTokens || 2048,
-          temperature: old.temperature || 0.3,
-          uiLanguage: old.uiLanguage || ''
-        });
-        
-        // 如果有 API Key，迁移到对应的 provider
-        if (old.apiKey && old.provider) {
-          await this.saveProvider(old.provider, {
-            endpoint: old.apiEndpoint || PROVIDER_DEFAULTS[old.provider]?.endpoint || '',
-            model: old.modelName || PROVIDER_DEFAULTS[old.provider]?.model || '',
-            apiKey: old.apiKey
-          });
-        }
-        
-        // 删除旧配置
-        await chrome.storage.sync.remove('config');
-        console.log('[ConfigManager] Migrated old config');
+      const oldConfig = result?.config;
+      
+      // 验证旧配置是否有效
+      if (!oldConfig || typeof oldConfig !== 'object' || Array.isArray(oldConfig)) {
+        return; // 没有需要迁移的配置
       }
+      
+      // 验证 provider 是否有效
+      const validProvider = (
+        oldConfig.provider && 
+        typeof oldConfig.provider === 'string' &&
+        PROVIDER_DEFAULTS[oldConfig.provider]
+      ) ? oldConfig.provider : 'google';
+      
+      // 迁移全局配置
+      await this.saveGlobal({
+        provider: validProvider,
+        sourceLang: oldConfig.sourceLang || 'auto',
+        targetLang: oldConfig.targetLang || 'zh-CN',
+        translationStyle: oldConfig.translationStyle || 'accurate',
+        showOriginal: oldConfig.showOriginal !== false,
+        autoDetect: oldConfig.autoDetect !== false,
+        showFab: oldConfig.showFab !== false,
+        customPrompt: oldConfig.customPrompt || '',
+        maxTokens: oldConfig.maxTokens || 2048,
+        temperature: oldConfig.temperature || 0.3,
+        uiLanguage: oldConfig.uiLanguage || ''
+      });
+      
+      // 如果有 API Key，迁移到对应的 provider
+      if (oldConfig.apiKey && typeof oldConfig.apiKey === 'string') {
+        const providerDefaults = PROVIDER_DEFAULTS[validProvider] || {};
+        await this.saveProvider(validProvider, {
+          endpoint: oldConfig.apiEndpoint || providerDefaults.endpoint || '',
+          model: oldConfig.modelName || providerDefaults.model || '',
+          apiKey: oldConfig.apiKey
+        });
+      }
+      
+      // 删除旧配置
+      await chrome.storage.sync.remove('config');
+      console.log('[ConfigManager] Migrated old config successfully');
+      
     } catch (error) {
       console.error('[ConfigManager] Migration failed:', error);
+      // 迁移失败不应阻止应用继续运行
     }
   }
 };
@@ -891,35 +968,227 @@ function handleProviderChange(e) {
   }
 }
 
-// 检查内容脚本是否已加载
-async function checkContentScript(tabId) {
+// ==================== 内容脚本通信 ====================
+
+/**
+ * 检查内容脚本是否已加载
+ * @param {number} tabId - 标签页ID
+ * @param {number} timeout - 超时时间(ms)
+ * @returns {Promise<boolean>}
+ */
+async function checkContentScript(tabId, timeout = 2000) {
+  if (!tabId || typeof tabId !== 'number') return false;
+  
   try {
-    const response = await chrome.tabs.sendMessage(tabId, { action: 'ping' });
-    return response && response.pong;
+    const response = await Promise.race([
+      chrome.tabs.sendMessage(tabId, { action: 'ping' }),
+      new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Ping timeout')), timeout)
+      )
+    ]);
+    return response?.pong === true;
   } catch (error) {
+    // 静默处理常见错误
+    const msg = error?.message || '';
+    if (msg.includes('Could not establish connection') ||
+        msg.includes('Receiving end does not exist') ||
+        msg.includes('Ping timeout')) {
+      return false;
+    }
+    console.warn('[Popup] checkContentScript error:', msg);
     return false;
   }
 }
 
-// 注入内容脚本
+/**
+ * 注入内容脚本
+ * @param {number} tabId - 标签页ID
+ * @returns {Promise<boolean>}
+ */
 async function injectContentScript(tabId) {
+  if (!tabId || typeof tabId !== 'number') return false;
+  
   try {
+    // 先尝试注入 CSS（可能已存在，忽略错误）
+    try {
+      await chrome.scripting.insertCSS({
+        target: { tabId },
+        files: ['styles/content.css']
+      });
+    } catch (cssError) {
+      // CSS 可能已经存在，忽略
+      console.log('[Popup] CSS may already be injected');
+    }
+    
+    // 注入 JS
     await chrome.scripting.executeScript({
-      target: { tabId: tabId },
+      target: { tabId },
       files: ['content/content.js']
     });
-    await chrome.scripting.insertCSS({
-      target: { tabId: tabId },
-      files: ['styles/content.css']
-    });
+    
     return true;
   } catch (error) {
-    console.error('Failed to inject content script:', error);
-    return false;
+    const msg = error?.message || '';
+    
+    // 检查是否是"脚本已存在"类型的错误（这其实是好的）
+    if (msg.includes('Cannot access') || msg.includes('not allowed')) {
+      logToConsole('此页面不支持脚本注入', 'warning');
+      return false;
+    }
+    
+    // 检查是否是扩展上下文失效
+    if (msg.includes('Extension context invalidated')) {
+      logToConsole('扩展已更新，请刷新页面', 'warning');
+      return false;
+    }
+    
+    // 其他错误，可能脚本已经存在
+    console.warn('[Popup] Script injection result:', msg);
+    
+    // 返回 true，让后续的 ping 检测来验证
+    return true;
   }
 }
 
-// 处理翻译页面（切换开关）
+/**
+ * 确保内容脚本已加载（带重试）
+ * 由于内容脚本通过 manifest.json 自动注入，这里主要处理：
+ * 1. 扩展更新后旧页面需要重新注入
+ * 2. 脚本初始化延迟
+ * 
+ * @param {number} tabId - 标签页ID
+ * @param {number} maxRetries - 最大重试次数
+ * @returns {Promise<boolean>}
+ */
+async function ensureContentScriptLoaded(tabId, maxRetries = 5) {
+  // 第一阶段：快速检查（脚本可能已通过 manifest 自动加载）
+  logToConsole('检查翻译脚本...', 'info');
+  
+  // 尝试多次 ping，脚本可能正在初始化
+  for (let i = 0; i < 3; i++) {
+    if (await checkContentScript(tabId, 1500)) {
+      logToConsole('翻译脚本已就绪', 'success');
+      return true;
+    }
+    // 等待脚本初始化
+    await sleep(300);
+  }
+  
+  // 第二阶段：尝试手动注入（扩展更新后旧页面需要重新注入）
+  logToConsole('尝试重新加载翻译脚本...', 'info');
+  
+  for (let i = 0; i < maxRetries; i++) {
+    logToConsole(`注入脚本中... (${i + 1}/${maxRetries})`, 'info');
+    
+    const injected = await injectContentScript(tabId);
+    
+    if (injected) {
+      // 等待脚本初始化（给更多时间）
+      await sleep(800);
+      
+      // 验证是否成功
+      if (await checkContentScript(tabId, 2000)) {
+        logToConsole('翻译脚本加载成功', 'success');
+        return true;
+      }
+    }
+    
+    // 等待后重试
+    if (i < maxRetries - 1) {
+      await sleep(500);
+    }
+  }
+  
+  // 最后尝试：可能脚本已加载但响应慢
+  logToConsole('最后检查...', 'info');
+  await sleep(1000);
+  if (await checkContentScript(tabId, 3000)) {
+    logToConsole('翻译脚本已就绪', 'success');
+    return true;
+  }
+  
+  logToConsole('无法加载翻译脚本，请刷新页面', 'error');
+  return false;
+}
+
+/**
+ * 安全发送消息到内容脚本
+ * @param {number} tabId - 标签页ID
+ * @param {object} message - 消息对象
+ * @param {number} timeout - 超时时间(ms)
+ * @returns {Promise<any>}
+ */
+async function sendMessageToTab(tabId, message, timeout = 5000) {
+  if (!tabId || !message) {
+    throw new Error('Invalid parameters');
+  }
+  
+  try {
+    const response = await Promise.race([
+      chrome.tabs.sendMessage(tabId, message),
+      new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Message timeout')), timeout)
+      )
+    ]);
+    return response;
+  } catch (error) {
+    const msg = error?.message || '';
+    
+    // 转换为友好的错误消息
+    if (msg.includes('Could not establish connection') ||
+        msg.includes('Receiving end does not exist')) {
+      throw new Error('CONTENT_SCRIPT_NOT_READY');
+    }
+    if (msg.includes('Message timeout')) {
+      throw new Error('CONTENT_SCRIPT_TIMEOUT');
+    }
+    
+    throw error;
+  }
+}
+
+/**
+ * 工具函数：延迟
+ */
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/**
+ * 检查标签页URL是否可翻译
+ * @param {string} url - 标签页URL
+ * @returns {{ canTranslate: boolean, reason?: string }}
+ */
+function checkUrlCanTranslate(url) {
+  if (!url) {
+    return { canTranslate: false, reason: 'NO_URL' };
+  }
+  
+  const blockedPrefixes = [
+    'chrome://',
+    'chrome-extension://',
+    'edge://',
+    'about:',
+    'moz-extension://',
+    'file://',
+    'view-source:',
+    'data:'
+  ];
+  
+  for (const prefix of blockedPrefixes) {
+    if (url.startsWith(prefix)) {
+      return { canTranslate: false, reason: 'BLOCKED_PAGE' };
+    }
+  }
+  
+  return { canTranslate: true };
+}
+
+// ==================== 翻译控制 ====================
+
+/**
+ * 处理翻译页面（主入口）
+ */
 async function handleTranslatePage() {
   const t = window.i18n.t;
   
@@ -929,73 +1198,127 @@ async function handleTranslatePage() {
     return;
   }
   
-  // 检查当前 Provider 是否需要 API Key（Google 和 Ollama 不需要）
-  const providerConfig = PROVIDER_DEFAULTS[currentConfig.provider];
-  const needsApiKey = providerConfig?.needsApiKey !== false;
-  if (needsApiKey && !currentConfig.apiKey) {
-    showToast(t('pleaseConfigureApi'), 'error');
-    logToConsole(t('errorApiKeyMissing'), 'error');
+  // 验证配置
+  const configError = validateTranslationConfig();
+  if (configError) {
+    showToast(configError, 'error');
+    logToConsole(configError, 'error');
     showPanel('settings');
     return;
   }
   
+  let tab = null;
+  
   try {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    // 获取当前标签页
+    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+    tab = tabs?.[0];
     
     if (!tab?.id) {
-      showToast(t('cannotGetPage'), 'error');
-      logToConsole(t('cannotGetPage'), 'error');
-      return;
+      throw new Error('CANNOT_GET_TAB');
     }
     
-    if (tab.url.startsWith('chrome://') || tab.url.startsWith('chrome-extension://') || 
-        tab.url.startsWith('edge://') || tab.url.startsWith('about:')) {
-      showToast(t('cannotUsePage'), 'error');
-      logToConsole(t('cannotUsePage'), 'warning');
-      return;
+    // 检查URL是否可翻译
+    const urlCheck = checkUrlCanTranslate(tab.url);
+    if (!urlCheck.canTranslate) {
+      throw new Error(urlCheck.reason);
     }
     
+    // 设置翻译状态
     setTranslatingState(true);
     logToConsole(t('consoleStarting'), 'info');
     
-    let scriptLoaded = await checkContentScript(tab.id);
-    
-    if (!scriptLoaded) {
-      logToConsole(t('consoleCollecting'), 'info');
-      const injected = await injectContentScript(tab.id);
-      
-      if (!injected) {
-        throw new Error(t('pleaseRefreshPage'));
-      }
-      
-      await new Promise(resolve => setTimeout(resolve, 500));
-      scriptLoaded = await checkContentScript(tab.id);
-      
-      if (!scriptLoaded) {
-        throw new Error(t('pleaseRefreshPage'));
-      }
+    // 确保内容脚本已加载
+    const scriptReady = await ensureContentScriptLoaded(tab.id);
+    if (!scriptReady) {
+      throw new Error('CONTENT_SCRIPT_FAILED');
     }
     
-    await chrome.tabs.sendMessage(tab.id, {
+    logToConsole(t('consoleCollecting'), 'info');
+    
+    // 发送翻译命令
+    await sendMessageToTab(tab.id, {
       action: 'translatePage',
       config: currentConfig
     });
     
+    logToConsole('翻译已启动', 'success');
+    
   } catch (error) {
-    console.error('Translation error:', error);
-    
-    let errorMsg = error.message;
-    if (error.message.includes('Could not establish connection') || 
-        error.message.includes('Receiving end does not exist')) {
-      errorMsg = t('pleaseRefreshPage');
-    }
-    
-    const friendlyError = parseErrorMessage(error);
-    showToast(errorMsg, 'error');
-    logToConsole(friendlyError, 'error');
-    updateStatus('error', t('translateError'), errorMsg);
-    setTranslatingState(false);
+    handleTranslationError(error, t);
   }
+}
+
+/**
+ * 验证翻译配置
+ * @returns {string|null} 错误消息或null
+ */
+function validateTranslationConfig() {
+  const t = window.i18n.t;
+  
+  // 确保 currentConfig 有效
+  if (!currentConfig || typeof currentConfig !== 'object') {
+    return t('errorConfigInvalid') || '配置无效，请刷新页面';
+  }
+  
+  // 检查 Provider 是否需要 API Key
+  const provider = currentConfig.provider || 'google';
+  const providerConfig = PROVIDER_DEFAULTS[provider];
+  const needsApiKey = providerConfig?.needsApiKey !== false;
+  
+  if (needsApiKey && !currentConfig.apiKey) {
+    return t('pleaseConfigureApi') || '请先配置 API Key';
+  }
+  
+  return null;
+}
+
+/**
+ * 处理翻译错误
+ * @param {Error} error - 错误对象
+ * @param {Function} t - 翻译函数
+ */
+function handleTranslationError(error, t) {
+  console.error('[Popup] Translation error:', error);
+  
+  const errorCode = error?.message || 'UNKNOWN';
+  let userMessage = '';
+  let logMessage = '';
+  
+  switch (errorCode) {
+    case 'CANNOT_GET_TAB':
+      userMessage = t('cannotGetPage') || '无法获取当前页面';
+      logMessage = userMessage;
+      break;
+      
+    case 'BLOCKED_PAGE':
+    case 'NO_URL':
+      userMessage = t('cannotUsePage') || '此页面不支持翻译';
+      logMessage = userMessage;
+      break;
+      
+    case 'CONTENT_SCRIPT_FAILED':
+    case 'CONTENT_SCRIPT_NOT_READY':
+      userMessage = t('pleaseRefreshPage') || '请刷新页面后重试';
+      logMessage = '内容脚本加载失败，请刷新页面';
+      break;
+      
+    case 'CONTENT_SCRIPT_TIMEOUT':
+      userMessage = t('pleaseRefreshPage') || '请刷新页面后重试';
+      logMessage = '通信超时，请刷新页面';
+      break;
+      
+    default:
+      // 使用通用错误解析
+      const friendlyError = parseErrorMessage(error);
+      userMessage = friendlyError;
+      logMessage = friendlyError;
+  }
+  
+  showToast(userMessage, 'error');
+  logToConsole(logMessage, 'error');
+  updateStatus('error', t('translateError') || '翻译出错', userMessage);
+  setTranslatingState(false);
 }
 
 // 设置翻译状态
@@ -1026,43 +1349,57 @@ function setTranslatingState(translating) {
 }
 
 // 处理停止翻译
+/**
+ * 处理停止翻译
+ */
 async function handleStopTranslate() {
   const t = window.i18n.t;
   
   try {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+    const tab = tabs?.[0];
     
     if (tab?.id) {
+      // 尝试发送停止命令，忽略通信错误
       try {
-        await chrome.tabs.sendMessage(tab.id, { action: 'stopTranslate' });
-      } catch (e) {}
+        await sendMessageToTab(tab.id, { action: 'stopTranslate' }, 2000);
+      } catch (e) {
+        // 静默处理 - 脚本可能已经停止或页面已关闭
+        console.warn('[Popup] Stop message failed:', e?.message);
+      }
     }
     
     setTranslatingState(false);
     updateStatus('idle', t('stopped'), t('stoppedDesc'));
-    logToConsole(t('consoleStopped'), 'warning');
+    logToConsole(t('consoleStopped') || '翻译已停止', 'warning');
     
   } catch (error) {
-    console.error('Stop error:', error);
+    console.error('[Popup] Stop error:', error);
+    // 确保状态被重置
     setTranslatingState(false);
   }
 }
 
-// 重置翻译按钮状态（保持向后兼容）
+/**
+ * 重置翻译按钮状态（保持向后兼容）
+ */
 function resetTranslateButton() {
   setTranslatingState(false);
 }
 
-// 处理恢复原样
+/**
+ * 处理恢复原样（移除所有翻译）
+ */
 async function handleRestore() {
   const t = window.i18n.t;
   
   try {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+    const tab = tabs?.[0];
     
     if (tab?.id) {
       try {
-        await chrome.tabs.sendMessage(tab.id, { action: 'removeTranslations' });
+        await sendMessageToTab(tab.id, { action: 'removeTranslations' }, 3000);
         
         // 隐藏恢复按钮
         if (elements.restoreBtn) {
