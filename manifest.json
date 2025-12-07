@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Open Immerse Translate",
-  "version": "1.6.6",
+  "version": "1.6.7",
   "description": "开源沉浸式翻译插件 - 支持自定义LLM API的双语对照翻译工具",
   "permissions": [
     "storage",
