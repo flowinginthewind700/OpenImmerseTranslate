@@ -3,6 +3,7 @@
   "name": "Open Immerse Translate",
   "version": "1.6.7",
   "description": "开源沉浸式翻译插件 - 支持自定义LLM API的双语对照翻译工具",
+  "minimum_chrome_version": "88",
   "permissions": [
     "storage",
     "activeTab",

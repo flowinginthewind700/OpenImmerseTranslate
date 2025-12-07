@@ -85,12 +85,22 @@ function showContextInvalidatedWarning() {
     if (!document.querySelector('.oit-context-warning')) {
       const warning = document.createElement('div');
       warning.className = 'oit-context-warning';
-      warning.innerHTML = `
-        <span>翻译扩展已更新，请</span>
-        <button onclick="location.reload()">刷新页面</button>
-        <span>继续使用</span>
-        <button class="close" onclick="this.parentElement.remove()">×</button>
-      `;
+      
+      // 创建文本节点和按钮（避免使用innerHTML和内联事件）
+      const text1 = document.createTextNode('翻译扩展已更新，请');
+      const reloadBtn = document.createElement('button');
+      reloadBtn.textContent = '刷新页面';
+      reloadBtn.addEventListener('click', () => location.reload());
+      const text2 = document.createTextNode('继续使用');
+      const closeBtn = document.createElement('button');
+      closeBtn.className = 'close';
+      closeBtn.textContent = '×';
+      closeBtn.addEventListener('click', () => warning.remove());
+      
+      warning.appendChild(text1);
+      warning.appendChild(reloadBtn);
+      warning.appendChild(text2);
+      warning.appendChild(closeBtn);
       warning.style.cssText = `
         position: fixed;
         bottom: 20px;
@@ -215,6 +225,11 @@ class TranslationState {
     this.translationQueue = []; // 待翻译队列
     this.activeTranslations = 0; // 当前并发数
     this.isProcessing = false; // 是否正在处理队列
+    
+    // 📄 PDF支持
+    this.isPdfPage = false; // 是否是PDF页面
+    this.currentPdfPage = 1; // 当前PDF页码
+    this.pdfPageObserver = null; // PDF翻页观察器
   }
   
   reset() {
@@ -243,13 +258,326 @@ class TranslationState {
       window.removeEventListener('scroll', this.scrollHandler);
       this.scrollHandler = null;
     }
+    if (this.pdfPageObserver) {
+      this.pdfPageObserver.disconnect();
+      this.pdfPageObserver = null;
+    }
   }
 }
 
 const state = new TranslationState();
 
+// ==================== PDF检测 ====================
+/**
+ * 检测当前页面是否是PDF
+ */
+function isPdfPage() {
+  // 方法1: 检查URL
+  if (window.location.href.toLowerCase().endsWith('.pdf') || 
+      window.location.href.includes('application/pdf') ||
+      window.location.href.includes('chrome-extension://') && window.location.href.includes('pdf')) {
+    return true;
+  }
+  
+  // 方法2: 检查是否有PDF.js相关的元素
+  if (document.querySelector('embed[type="application/pdf"]') ||
+      document.querySelector('iframe[src*=".pdf"]') ||
+      document.querySelector('.pdfViewer') ||
+      document.querySelector('#viewer') ||
+      document.querySelector('.textLayer') ||
+      document.querySelector('embed[type="application/pdf"]')) {
+    return true;
+  }
+  
+  // 方法3: 检查页面标题或MIME类型
+  const contentType = document.contentType;
+  if (contentType && contentType.includes('pdf')) {
+    return true;
+  }
+  
+  // 方法4: 检查Chrome内置PDF查看器的特征
+  if (document.querySelector('embed') && 
+      (document.body.innerHTML.includes('pdf') || 
+       document.title.toLowerCase().includes('pdf'))) {
+    return true;
+  }
+  
+  return false;
+}
+
+/**
+ * 检查PDF是否在iframe中
+ */
+function findPdfIframe() {
+  // 检查当前页面是否是iframe
+  if (window.self !== window.top) {
+    // 在iframe中，检查父页面
+    try {
+      const parentDoc = window.parent.document;
+      const iframes = parentDoc.querySelectorAll('iframe, embed');
+      for (const iframe of iframes) {
+        if (iframe.src && iframe.src.includes('.pdf')) {
+          return iframe;
+        }
+      }
+    } catch (e) {
+      // 跨域限制
+    }
+  }
+  
+  // 检查当前页面的iframe
+  const iframes = document.querySelectorAll('iframe, embed');
+  for (const iframe of iframes) {
+    if (iframe.src && iframe.src.includes('.pdf')) {
+      return iframe;
+    }
+  }
+  
+  return null;
+}
+
+/**
+ * 获取当前PDF页码（Chrome内置PDF查看器）
+ */
+function getCurrentPdfPage() {
+  // Chrome PDF查看器通常使用特定的类名或ID
+  const pageInput = document.querySelector('input[type="number"][id*="page"]') ||
+                    document.querySelector('input[type="number"][aria-label*="page" i]') ||
+                    document.querySelector('.toolbar input[type="number"]');
+  
+  if (pageInput) {
+    const page = parseInt(pageInput.value || pageInput.getAttribute('value') || '1');
+    return isNaN(page) ? 1 : page;
+  }
+  
+  // 尝试从URL获取页码
+  const urlParams = new URLSearchParams(window.location.search);
+  const page = urlParams.get('page');
+  if (page) {
+    const pageNum = parseInt(page);
+    return isNaN(pageNum) ? 1 : pageNum;
+  }
+  
+  // 尝试通过滚动位置估算页码（不准确，但作为后备）
+  const textLayers = document.querySelectorAll('.textLayer');
+  if (textLayers.length > 0) {
+    const viewportTop = window.scrollY;
+    let currentPage = 1;
+    for (let i = 0; i < textLayers.length; i++) {
+      const rect = textLayers[i].getBoundingClientRect();
+      const pageTop = rect.top + window.scrollY;
+      if (pageTop <= viewportTop + 100) {
+        currentPage = i + 1;
+      } else {
+        break;
+      }
+    }
+    return currentPage;
+  }
+  
+  return 1;
+}
+
+/**
+ * 监听PDF翻页事件
+ */
+function startPdfPageObserver() {
+  if (!state.isPdfPage) return;
+  
+  let lastPage = state.currentPdfPage;
+  
+  // 方法1: 监听页码输入框变化
+  const pageInput = document.querySelector('input[type="number"][id*="page"]') ||
+                    document.querySelector('input[type="number"][aria-label*="page" i]') ||
+                    document.querySelector('.toolbar input[type="number"]');
+  
+  if (pageInput) {
+    const checkPageChange = () => {
+      const currentPage = getCurrentPdfPage();
+      if (currentPage !== lastPage) {
+        console.log(`[OIT] PDF page changed: ${lastPage} -> ${currentPage}`);
+        lastPage = currentPage;
+        state.currentPdfPage = currentPage;
+        handlePdfPageChange();
+      }
+    };
+    
+    // 监听输入框变化
+    pageInput.addEventListener('change', checkPageChange);
+    pageInput.addEventListener('input', checkPageChange);
+    
+    // 定期检查（作为后备）
+    setInterval(checkPageChange, 500);
+  }
+  
+  // 方法2: 监听滚动事件（PDF翻页通常伴随滚动）
+  let lastScrollY = window.scrollY;
+  let scrollTimeout = null;
+  
+  const scrollCheck = () => {
+    if (scrollTimeout) clearTimeout(scrollTimeout);
+    
+    scrollTimeout = setTimeout(() => {
+      const currentPage = getCurrentPdfPage();
+      if (currentPage !== lastPage) {
+        console.log(`[OIT] PDF page changed via scroll: ${lastPage} -> ${currentPage}`);
+        lastPage = currentPage;
+        state.currentPdfPage = currentPage;
+        handlePdfPageChange();
+      }
+      lastScrollY = window.scrollY;
+    }, 300);
+  };
+  
+  window.addEventListener('scroll', scrollCheck, { passive: true });
+  
+  // 方法3: 使用MutationObserver监听DOM变化（PDF.js可能动态更新页面）
+  if (state.pdfPageObserver) {
+    state.pdfPageObserver.disconnect();
+  }
+  
+  state.pdfPageObserver = new MutationObserver(() => {
+    const currentPage = getCurrentPdfPage();
+    if (currentPage !== lastPage) {
+      console.log(`[OIT] PDF page changed via DOM: ${lastPage} -> ${currentPage}`);
+      lastPage = currentPage;
+      state.currentPdfPage = currentPage;
+      handlePdfPageChange();
+    }
+  });
+  
+  state.pdfPageObserver.observe(document.body, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    attributeFilter: ['value', 'aria-label']
+  });
+}
+
+/**
+ * 处理PDF翻页事件
+ */
+function handlePdfPageChange() {
+  if (!state.isActive || !state.isPdfPage) return;
+  
+  console.log('[OIT-PDF] PDF page changed, clearing old translations and translating new page');
+  
+  // 清除当前页面的所有翻译（只清除当前可见区域的）
+  clearCurrentPageTranslations();
+  
+  // 📄 PDF模式：清除侧边栏中的旧翻译
+  clearCurrentPagePdfTranslations();
+  
+  // 重置状态（但保持翻译激活状态）
+  state.completedElements = new WeakSet();
+  state.processedTexts.clear();
+  state.translatedCount = 0;
+  state.translationQueue = [];
+  
+  // 重新扫描当前页并翻译
+  setTimeout(() => {
+    if (state.isActive && !state.shouldStop) {
+      const viewportBlocks = collectViewportBlocks();
+      console.log(`[OIT-PDF] Found ${viewportBlocks.length} text blocks on page ${state.currentPdfPage}`);
+      if (viewportBlocks.length > 0) {
+        sendLog(`📄 发现第${state.currentPdfPage}页 ${viewportBlocks.length} 个文本块`, 'info');
+        viewportBlocks.forEach(block => {
+          addToQueue(block);
+        });
+        processQueue();
+      } else {
+        sendLog(`⚠️ 第${state.currentPdfPage}页未发现可翻译文本`, 'warning');
+      }
+    }
+  }, 200); // 等待PDF渲染完成
+}
+
+/**
+ * 开始翻译时，如果是PDF模式，创建侧边栏
+ */
+function initPdfSidebarIfNeeded() {
+  if (state.isPdfPage && !pdfSidebar) {
+    createPdfSidebar();
+    console.log('[OIT-PDF] Sidebar initialized');
+  }
+}
+
+/**
+ * 清除当前页面的翻译（只清除视口内的）
+ */
+function clearCurrentPageTranslations() {
+  const viewportTop = window.scrollY;
+  const viewportBottom = viewportTop + window.innerHeight;
+  
+  document.querySelectorAll('.oit-wrapper').forEach(wrapper => {
+    const rect = wrapper.getBoundingClientRect();
+    const elementTop = rect.top + window.scrollY;
+    const elementBottom = elementTop + rect.height;
+    
+    // 只清除视口内的翻译
+    if (elementBottom >= viewportTop - 100 && elementTop <= viewportBottom + 100) {
+      // 处理 Twitter 等追加翻译的情况
+      const appendedTranslation = wrapper.querySelector(':scope > .oit-translation:last-child');
+      if (appendedTranslation && !wrapper.querySelector('.oit-original')) {
+        appendedTranslation.remove();
+        wrapper.classList.remove('oit-wrapper', 'oit-dark');
+        return;
+      }
+      
+      // 常规包装器处理
+      const original = wrapper.querySelector('.oit-original');
+      if (original) {
+        const textNode = document.createTextNode(original.textContent);
+        wrapper.parentNode?.replaceChild(textNode, wrapper);
+      } else {
+        wrapper.remove();
+      }
+    }
+  });
+  
+  // 清除待翻译标记
+  document.querySelectorAll('.oit-pending, .oit-pending-dark, .oit-translating-text').forEach(el => {
+    const rect = el.getBoundingClientRect();
+    const elementTop = rect.top + window.scrollY;
+    const elementBottom = elementTop + rect.height;
+    
+    if (elementBottom >= viewportTop - 100 && elementTop <= viewportBottom + 100) {
+      el.classList.remove('oit-pending', 'oit-pending-dark', 'oit-translating-text');
+    }
+  });
+}
+
 // ==================== 初始化 ====================
 console.log('[OpenImmerseTranslate] Content script loaded - Viewport-first algorithm');
+
+// 检测PDF页面
+state.isPdfPage = isPdfPage();
+if (state.isPdfPage) {
+  state.currentPdfPage = getCurrentPdfPage();
+  console.log(`[OIT] PDF page detected, current page: ${state.currentPdfPage}`);
+  console.log(`[OIT-PDF] URL: ${window.location.href}`);
+  console.log(`[OIT-PDF] Content-Type: ${document.contentType}`);
+  
+  // 检查是否有iframe
+  const pdfIframe = findPdfIframe();
+  if (pdfIframe) {
+    console.log('[OIT-PDF] PDF found in iframe/embed');
+  }
+  
+  // 等待PDF加载完成后再尝试收集文本
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', () => {
+      setTimeout(() => {
+        console.log('[OIT-PDF] DOM loaded, ready for text collection');
+      }, 1000);
+    });
+  } else {
+    // 延迟一下，等待PDF渲染
+    setTimeout(() => {
+      console.log('[OIT-PDF] Page ready, checking for text elements...');
+    }, 1000);
+  }
+}
 
 // 监听消息
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -370,6 +698,7 @@ function resetFabToIdle() {
 /**
  * 开始翻译 - 流式翻译策略
  * 🚀 核心优化：单条翻译 + 并发控制 + 即时显示
+ * 📄 PDF模式：只显示侧边栏，不进行自动翻译
  */
 function startTranslation(config) {
   if (state.isActive) {
@@ -377,6 +706,17 @@ function startTranslation(config) {
     return;
   }
   
+  // 重新检测PDF页面
+  state.isPdfPage = isPdfPage();
+  if (state.isPdfPage) {
+    // PDF模式：只显示侧边栏，不进行自动翻译
+    console.log('[OIT-PDF] PDF mode: showing sidebar for manual translation');
+    initPdfSidebarIfNeeded();
+    sendLog('📄 PDF模式：请使用侧边栏手动翻译', 'info');
+    return; // PDF模式下不进行自动翻译
+  }
+  
+  // 非PDF模式：正常自动翻译流程
   state.reset();
   state.config = config;
   state.isActive = true;
@@ -536,6 +876,7 @@ async function translateSingle(block) {
 
 /**
  * 启动滚动监听
+ * 📄 PDF模式：滚动时检查是否翻页，如果翻页则由翻页监听器处理
  */
 function startScrollListener() {
   if (state.scrollHandler) return;
@@ -549,6 +890,7 @@ function startScrollListener() {
     const scrollDelta = Math.abs(currentScrollY - lastScrollY);
     lastScrollY = currentScrollY;
     
+    
     // 防抖处理
     if (state.scrollTimer) {
       clearTimeout(state.scrollTimer);
@@ -558,6 +900,7 @@ function startScrollListener() {
     const delay = scrollDelta > 200 ? 50 : CONFIG.SCROLL_DEBOUNCE;
     
     state.scrollTimer = setTimeout(() => {
+      // PDF模式下，小幅滚动时也扫描当前页（可能PDF内容动态加载）
       scanViewportAndQueue();
     }, delay);
   };
@@ -686,24 +1029,35 @@ function startMutationObserver() {
 }
 
 /**
- * 收集视口内可见的文本块（增强版 - 支持各类 SPA）
+ * 收集视口内可见的文本块（增强版 - 支持各类 SPA 和 PDF）
  * 🔥 关键：只用 completedElements 去重，不用 processedTexts 提前标记
+ * 📄 PDF模式：只收集当前页面的内容
  */
 function collectViewportBlocks() {
   const blocks = [];
   const viewportHeight = window.innerHeight;
   const seenInThisScan = new Set(); // 本次扫描内去重
   
-  // 第一步：优先处理 Twitter/X 的推文内容
-  const tweetTexts = document.querySelectorAll('[data-testid="tweetText"]');
-  for (const el of tweetTexts) {
-    if (blocks.length >= CONFIG.MAX_VIEWPORT_SCAN) break;
-    if (state.completedElements.has(el)) continue; // 只用 completedElements 去重
-    if (el.closest('.oit-wrapper') || el.classList.contains('oit-pending')) continue;
-    
-    const rect = el.getBoundingClientRect();
-    // 视口检测：当前视口上下各扩展 50%
-    if (rect.bottom < -viewportHeight * 0.5 || rect.top > viewportHeight * 1.5) continue;
+  // 📄 PDF模式：只收集当前可见页面的内容
+  // 在PDF中，每页通常占据整个视口或接近整个视口
+  const viewportTop = window.scrollY;
+  const viewportBottom = viewportTop + window.innerHeight;
+  
+  // PDF模式下的视口范围（只包含当前页，上下各留50px缓冲）
+  const pdfViewportTop = state.isPdfPage ? viewportTop - 50 : -Infinity;
+  const pdfViewportBottom = state.isPdfPage ? viewportBottom + 50 : Infinity;
+  
+  // 第一步：优先处理 Twitter/X 的推文内容（PDF模式下跳过）
+  if (!state.isPdfPage) {
+    const tweetTexts = document.querySelectorAll('[data-testid="tweetText"]');
+    for (const el of tweetTexts) {
+      if (blocks.length >= CONFIG.MAX_VIEWPORT_SCAN) break;
+      if (state.completedElements.has(el)) continue; // 只用 completedElements 去重
+      if (el.closest('.oit-wrapper') || el.classList.contains('oit-pending')) continue;
+      
+      const rect = el.getBoundingClientRect();
+      // 视口检测：当前视口上下各扩展 50%
+      if (rect.bottom < -viewportHeight * 0.5 || rect.top > viewportHeight * 1.5) continue;
     
     const text = el.textContent?.trim();
     if (!text || text.length < CONFIG.MIN_TEXT_LENGTH) continue;
@@ -712,25 +1066,29 @@ function collectViewportBlocks() {
     if (/^[\d\s\p{P}\p{S}]+$/u.test(text)) continue;
     if (state.config?.autoDetect && isTargetLanguage(text)) continue;
     
-    seenInThisScan.add(text);
-    blocks.push({ 
-      element: el, 
-      textNode: null,
-      text,
-      isTwitter: true 
-    });
+      seenInThisScan.add(text);
+      blocks.push({ 
+        element: el, 
+        textNode: null,
+        text,
+        isTwitter: true 
+      });
+    }
   }
   
   // 第二步：处理标题和段落（优先级高）
+  // PDF模式下不进行自动文本收集，只使用手动翻译
+  
+  // 常规元素处理
   const primarySelectors = 'h1, h2, h3, h4, h5, h6, p, blockquote, figcaption';
-  collectElementsWithText(primarySelectors, blocks, viewportHeight, seenInThisScan);
+  collectElementsWithText(primarySelectors, blocks, viewportHeight, seenInThisScan, pdfViewportTop, pdfViewportBottom);
   
   // 第三步：处理列表项和其他容器
   const secondarySelectors = 'li, td, th, dt, dd, label, button, a';
-  collectElementsWithText(secondarySelectors, blocks, viewportHeight, seenInThisScan);
+  collectElementsWithText(secondarySelectors, blocks, viewportHeight, seenInThisScan, pdfViewportTop, pdfViewportBottom);
   
   // 第四步：处理 span 和 div（只取叶子节点）
-  collectLeafTextElements(blocks, viewportHeight, seenInThisScan);
+  collectLeafTextElements(blocks, viewportHeight, seenInThisScan, pdfViewportTop, pdfViewportBottom);
   
   // 按Y坐标排序
   blocks.sort((a, b) => {
@@ -746,8 +1104,9 @@ function collectViewportBlocks() {
 /**
  * 收集指定选择器的文本元素
  * 🔥 增强去重：记录已收集元素，防止父子元素重复
+ * 📄 PDF模式：只收集当前页面的元素
  */
-function collectElementsWithText(selectors, blocks, viewportHeight, seenInThisScan) {
+function collectElementsWithText(selectors, blocks, viewportHeight, seenInThisScan, pdfViewportTop = -Infinity, pdfViewportBottom = Infinity) {
   const elements = document.querySelectorAll(selectors);
   // 记录本次已收集的元素（用于检查父子关系）
   const collectedElements = new WeakSet();
@@ -756,8 +1115,16 @@ function collectElementsWithText(selectors, blocks, viewportHeight, seenInThisSc
     if (blocks.length >= CONFIG.MAX_VIEWPORT_SCAN) break;
     
     const rect = el.getBoundingClientRect();
-    // 🔥 只检测当前视口附近（上下各50%），不要太远
-    if (rect.bottom < -viewportHeight * 0.5 || rect.top > viewportHeight * 1.5) continue;
+    const elementTop = rect.top + window.scrollY;
+    const elementBottom = elementTop + rect.height;
+    
+    // 📄 PDF模式：只检测当前页面的元素
+    if (state.isPdfPage) {
+      if (elementBottom < pdfViewportTop || elementTop > pdfViewportBottom) continue;
+    } else {
+      // 🔥 只检测当前视口附近（上下各50%），不要太远
+      if (rect.bottom < -viewportHeight * 0.5 || rect.top > viewportHeight * 1.5) continue;
+    }
     if (rect.width === 0 || rect.height === 0) continue;
     
     if (el.closest('.oit-wrapper') || el.classList.contains('oit-pending')) continue;
@@ -814,8 +1181,9 @@ function isChildOfCollected(element, collectedElements) {
 /**
  * 收集叶子文本节点（span/div 中没有更深子元素的）
  * 🔥 增强去重：检查父元素是否已被收集
+ * 📄 PDF模式：只收集当前页面的元素
  */
-function collectLeafTextElements(blocks, viewportHeight, seenInThisScan) {
+function collectLeafTextElements(blocks, viewportHeight, seenInThisScan, pdfViewportTop = -Infinity, pdfViewportBottom = Infinity) {
   // 🔥 收集当前 blocks 中的所有元素，用于检查父子关系
   const existingElements = new WeakSet();
   for (const block of blocks) {
@@ -854,10 +1222,20 @@ function collectLeafTextElements(blocks, viewportHeight, seenInThisScan) {
         // 跳过不需要的标签
         if (CONFIG.SKIP_TAGS.has(parent.tagName)) return NodeFilter.FILTER_REJECT;
         
-        // 🔥 只检测当前视口附近（上下各50%）
+        // 📄 PDF模式：只检测当前页面的元素
         const rect = parent.getBoundingClientRect();
-        if (rect.bottom < -viewportHeight * 0.5 || rect.top > viewportHeight * 1.5) {
-          return NodeFilter.FILTER_REJECT;
+        const elementTop = rect.top + window.scrollY;
+        const elementBottom = elementTop + rect.height;
+        
+        if (state.isPdfPage) {
+          if (elementBottom < pdfViewportTop || elementTop > pdfViewportBottom) {
+            return NodeFilter.FILTER_REJECT;
+          }
+        } else {
+          // 🔥 只检测当前视口附近（上下各50%）
+          if (rect.bottom < -viewportHeight * 0.5 || rect.top > viewportHeight * 1.5) {
+            return NodeFilter.FILTER_REJECT;
+          }
         }
         if (rect.width === 0 || rect.height === 0) return NodeFilter.FILTER_REJECT;
         
@@ -1302,6 +1680,495 @@ function parseFriendlyError(errorMsg) {
   return errorMsg || '❓ 未知错误';
 }
 
+// ==================== PDF侧边栏翻译 ====================
+
+let pdfSidebar = null;
+let pdfTranslations = new Map(); // 存储翻译映射：元素位置 -> 翻译内容
+let pdfSidebarDragHandlers = null; // 存储拖拽事件处理器，用于清理
+
+/**
+ * 创建PDF侧边栏
+ */
+function createPdfSidebar() {
+  if (pdfSidebar) return pdfSidebar;
+  
+  // 清理之前的监听器（如果存在）
+  if (pdfSidebarDragHandlers) {
+    cleanupPdfSidebarDragHandlers();
+  }
+  
+  pdfSidebar = document.createElement('div');
+  pdfSidebar.id = 'oit-pdf-sidebar';
+  pdfSidebar.className = 'oit-pdf-sidebar';
+  pdfSidebar.innerHTML = `
+    <div class="oit-pdf-sidebar-header">
+      <span class="oit-pdf-sidebar-title">📄 翻译面板</span>
+      <button class="oit-pdf-sidebar-toggle" title="收起/展开">−</button>
+      <button class="oit-pdf-sidebar-close" title="关闭">×</button>
+    </div>
+    <div class="oit-pdf-sidebar-tabs">
+      <button class="oit-pdf-tab active" data-tab="translations">翻译列表</button>
+      <button class="oit-pdf-tab" data-tab="manual">手动翻译</button>
+    </div>
+    <div class="oit-pdf-sidebar-content" id="oit-pdf-sidebar-content">
+      <div class="oit-pdf-sidebar-empty">当前页面暂无翻译内容</div>
+    </div>
+    <div class="oit-pdf-sidebar-manual" id="oit-pdf-sidebar-manual" style="display: none;">
+      <div class="oit-pdf-manual-input">
+        <textarea id="oit-pdf-manual-text" placeholder="请选择PDF中的文本，或手动输入要翻译的文本..."></textarea>
+        <button id="oit-pdf-manual-translate" class="oit-pdf-manual-btn">翻译</button>
+      </div>
+      <div class="oit-pdf-manual-result" id="oit-pdf-manual-result"></div>
+    </div>
+  `;
+  
+  // 标签切换
+  const tabs = pdfSidebar.querySelectorAll('.oit-pdf-tab');
+  const translationsTab = pdfSidebar.querySelector('[data-tab="translations"]');
+  const manualTab = pdfSidebar.querySelector('[data-tab="manual"]');
+  const translationsContent = pdfSidebar.querySelector('#oit-pdf-sidebar-content');
+  const manualContent = pdfSidebar.querySelector('#oit-pdf-sidebar-manual');
+  
+  // 标签切换（支持触摸，防止重复触发）
+  let lastTouchTime = 0;
+  const switchTab = (targetTab, e) => {
+    // 防止触摸和点击重复触发（300ms内）
+    if (e && e.type === 'touchend') {
+      const now = Date.now();
+      if (now - lastTouchTime < 300) {
+        return;
+      }
+      lastTouchTime = now;
+      e.preventDefault();
+    }
+    
+    tabs.forEach(t => t.classList.remove('active'));
+    targetTab.classList.add('active');
+    if (targetTab === translationsTab) {
+      translationsContent.style.display = 'block';
+      manualContent.style.display = 'none';
+    } else {
+      translationsContent.style.display = 'none';
+      manualContent.style.display = 'block';
+    }
+  };
+  
+  translationsTab.addEventListener('click', (e) => switchTab(translationsTab, e));
+  translationsTab.addEventListener('touchend', (e) => switchTab(translationsTab, e));
+  
+  manualTab.addEventListener('click', (e) => switchTab(manualTab, e));
+  manualTab.addEventListener('touchend', (e) => switchTab(manualTab, e));
+  
+  // 手动翻译功能
+  const manualTextarea = pdfSidebar.querySelector('#oit-pdf-manual-text');
+  const manualTranslateBtn = pdfSidebar.querySelector('#oit-pdf-manual-translate');
+  const manualResult = pdfSidebar.querySelector('#oit-pdf-manual-result');
+  
+  // 监听文本选择，自动填充到输入框
+  document.addEventListener('selectionchange', () => {
+    const selection = window.getSelection();
+    const selectedText = selection.toString().trim();
+    if (selectedText.length >= CONFIG.MIN_TEXT_LENGTH && manualContent.style.display !== 'none') {
+      manualTextarea.value = selectedText;
+    }
+  });
+  
+  // 翻译按钮（支持触摸，防止重复触发）
+  let isTranslating = false;
+  let lastTranslateTouchTime = 0;
+  const handleTranslate = async (e) => {
+    // 防止触摸和点击重复触发
+    if (e.type === 'touchend') {
+      const now = Date.now();
+      if (now - lastTranslateTouchTime < 300) {
+        return;
+      }
+      lastTranslateTouchTime = now;
+    }
+    
+    // 防止重复点击
+    if (isTranslating) {
+      return;
+    }
+    
+    e.preventDefault();
+    e.stopPropagation();
+    
+    const text = manualTextarea.value.trim();
+    if (text.length < CONFIG.MIN_TEXT_LENGTH) {
+      manualResult.innerHTML = '<div class="oit-pdf-manual-error">请输入要翻译的文本（至少2个字符）</div>';
+      return;
+    }
+    
+    isTranslating = true;
+    manualTranslateBtn.disabled = true;
+    manualResult.innerHTML = '<div class="oit-pdf-manual-loading">翻译中...</div>';
+    
+    try {
+      const config = await loadFullConfig();
+      const needsApiKey = checkNeedsApiKey(config.provider);
+      if (needsApiKey && !config.apiKey) {
+        manualResult.innerHTML = '<div class="oit-pdf-manual-error">请先在插件设置中配置 API 密钥</div>';
+        return;
+      }
+      
+      const response = await chrome.runtime.sendMessage({
+        action: 'translate',
+        texts: [text],
+        config: config
+      });
+      
+      if (response.error) throw new Error(response.error);
+      
+      const translation = response.translations[0];
+      // 使用textContent而不是innerHTML的data属性，更安全
+      manualResult.innerHTML = `
+        <div class="oit-pdf-manual-success">
+          <div class="oit-pdf-manual-original"><strong>原文：</strong>${escapeHtml(text)}</div>
+          <div class="oit-pdf-manual-translation"><strong>翻译：</strong>${escapeHtml(translation)}</div>
+          <button class="oit-pdf-manual-copy">复制翻译</button>
+        </div>
+      `;
+      
+      // 绑定复制按钮（支持触摸，防止重复触发）
+      const copyBtn = manualResult.querySelector('.oit-pdf-manual-copy');
+      let lastCopyTouchTime = 0;
+      const handleCopy = async (e) => {
+        // 防止触摸和点击重复触发
+        if (e.type === 'touchend') {
+          const now = Date.now();
+          if (now - lastCopyTouchTime < 300) {
+            return;
+          }
+          lastCopyTouchTime = now;
+        }
+        e.preventDefault();
+        e.stopPropagation();
+        try {
+          await navigator.clipboard.writeText(translation);
+          copyBtn.textContent = '已复制';
+          setTimeout(() => {
+            if (copyBtn && copyBtn.parentElement) {
+              copyBtn.textContent = '复制翻译';
+            }
+          }, 2000);
+        } catch (err) {
+          console.error('复制失败:', err);
+          if (copyBtn) {
+            copyBtn.textContent = '复制失败';
+          }
+        }
+      };
+      copyBtn.addEventListener('click', handleCopy);
+      copyBtn.addEventListener('touchend', handleCopy);
+    } catch (error) {
+      manualResult.innerHTML = `<div class="oit-pdf-manual-error">翻译失败: ${escapeHtml(error.message)}</div>`;
+    } finally {
+      isTranslating = false;
+      manualTranslateBtn.disabled = false;
+    }
+  };
+  
+  manualTranslateBtn.addEventListener('click', handleTranslate);
+  manualTranslateBtn.addEventListener('touchend', handleTranslate);
+  
+  document.body.appendChild(pdfSidebar);
+  
+  // 绑定事件
+  const toggleBtn = pdfSidebar.querySelector('.oit-pdf-sidebar-toggle');
+  const closeBtn = pdfSidebar.querySelector('.oit-pdf-sidebar-close');
+  
+  // 切换和关闭按钮（支持触摸，防止重复触发）
+  let lastButtonTouchTime = 0;
+  const handleToggle = (e) => {
+    // 防止触摸和点击重复触发
+    if (e.type === 'touchend') {
+      const now = Date.now();
+      if (now - lastButtonTouchTime < 300) {
+        return;
+      }
+      lastButtonTouchTime = now;
+    }
+    e.preventDefault();
+    e.stopPropagation();
+    pdfSidebar.classList.toggle('collapsed');
+    toggleBtn.textContent = pdfSidebar.classList.contains('collapsed') ? '+' : '−';
+  };
+  
+  const handleClose = (e) => {
+    // 防止触摸和点击重复触发
+    if (e.type === 'touchend') {
+      const now = Date.now();
+      if (now - lastButtonTouchTime < 300) {
+        return;
+      }
+      lastButtonTouchTime = now;
+    }
+    e.preventDefault();
+    e.stopPropagation();
+    pdfSidebar.style.display = 'none';
+  };
+  
+  toggleBtn.addEventListener('click', handleToggle);
+  toggleBtn.addEventListener('touchend', handleToggle);
+  
+  closeBtn.addEventListener('click', handleClose);
+  closeBtn.addEventListener('touchend', handleClose);
+  
+  // 拖拽功能（支持触摸）
+  let isDragging = false;
+  let startX, startY, startLeft, startTop;
+  
+  const header = pdfSidebar.querySelector('.oit-pdf-sidebar-header');
+  
+  // 鼠标事件
+  header.addEventListener('mousedown', (e) => {
+    if (e.target === toggleBtn || e.target === closeBtn) return;
+    isDragging = true;
+    startX = e.clientX;
+    startY = e.clientY;
+    const rect = pdfSidebar.getBoundingClientRect();
+    startLeft = rect.left;
+    startTop = rect.top;
+    pdfSidebar.style.transition = 'none';
+    e.preventDefault();
+  });
+  
+  // 触摸事件
+  header.addEventListener('touchstart', (e) => {
+    if (e.target === toggleBtn || e.target === closeBtn) return;
+    isDragging = true;
+    const touch = e.touches[0];
+    startX = touch.clientX;
+    startY = touch.clientY;
+    const rect = pdfSidebar.getBoundingClientRect();
+    startLeft = rect.left;
+    startTop = rect.top;
+    pdfSidebar.style.transition = 'none';
+    e.preventDefault();
+  }, { passive: false });
+  
+  // 移动事件（鼠标和触摸）
+  const handleMove = (e) => {
+    if (!isDragging) return;
+    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+    const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+    const deltaX = clientX - startX;
+    const deltaY = clientY - startY;
+    pdfSidebar.style.left = (startLeft + deltaX) + 'px';
+    pdfSidebar.style.top = (startTop + deltaY) + 'px';
+    pdfSidebar.style.right = 'auto';
+    e.preventDefault();
+  };
+  
+  // 结束事件（鼠标和触摸）
+  const handleEnd = () => {
+    if (isDragging) {
+      isDragging = false;
+      pdfSidebar.style.transition = '';
+    }
+  };
+  
+  // 保存处理器引用，用于后续清理
+  pdfSidebarDragHandlers = {
+    handleMove,
+    handleEnd
+  };
+  
+  document.addEventListener('mousemove', handleMove);
+  document.addEventListener('touchmove', handleMove, { passive: false });
+  document.addEventListener('mouseup', handleEnd);
+  document.addEventListener('touchend', handleEnd);
+  document.addEventListener('touchcancel', handleEnd);
+  
+  console.log('[OIT-PDF] Sidebar created');
+  return pdfSidebar;
+}
+
+/**
+ * 清理PDF侧边栏拖拽事件监听器
+ */
+function cleanupPdfSidebarDragHandlers() {
+  if (!pdfSidebarDragHandlers) return;
+  
+  const { handleMove, handleEnd } = pdfSidebarDragHandlers;
+  document.removeEventListener('mousemove', handleMove);
+  document.removeEventListener('touchmove', handleMove);
+  document.removeEventListener('mouseup', handleEnd);
+  document.removeEventListener('touchend', handleEnd);
+  document.removeEventListener('touchcancel', handleEnd);
+  
+  pdfSidebarDragHandlers = null;
+}
+
+/**
+ * 应用PDF翻译到侧边栏
+ */
+function applyPdfTranslation(block, translation) {
+  const { element, text, isPdf, isEmbedContent, isPdfJs, pdfJsItem } = block;
+  
+  // 移除待翻译标记（如果元素存在且可访问）
+  if (element && element.removeAttribute) {
+    removePendingMark(element);
+  }
+  
+  // 检查是否已经翻译过
+  const elementId = (element && element.getAttribute) 
+    ? element.getAttribute('data-oit-id') || generateElementId(element)
+    : `oit-${Date.now()}-${Math.random()}`;
+    
+  if (pdfTranslations.has(elementId)) {
+    console.log('[OIT-PDF] Skipping duplicate translation for:', text?.substring(0, 30));
+    return;
+  }
+  
+  // 获取元素位置信息（用于在侧边栏中显示位置）
+  let elementTop = 0;
+  if (isPdfJs && pdfJsItem) {
+    // PDF.js的文本项，使用transform中的位置
+    elementTop = pdfJsItem.transform[5] || 0;
+  } else if (element && element.getBoundingClientRect) {
+    try {
+      const rect = element.getBoundingClientRect();
+      const viewportTop = window.scrollY;
+      elementTop = rect.top + viewportTop;
+    } catch (e) {
+      // 跨域或安全限制，使用默认值
+      elementTop = pdfTranslations.size * 50; // 简单的递增位置
+    }
+  } else {
+    elementTop = pdfTranslations.size * 50;
+  }
+  
+  // 存储翻译
+  pdfTranslations.set(elementId, {
+    original: text,
+    translation: translation,
+    element: element,
+    position: elementTop,
+    timestamp: Date.now(),
+    isPdfJs: isPdfJs || false,
+    pdfJsItem: pdfJsItem || null
+  });
+  
+  // 创建或更新侧边栏
+  if (!pdfSidebar) {
+    createPdfSidebar();
+  }
+  
+  // 更新侧边栏内容
+  updatePdfSidebar();
+  
+  // 标记元素（如果可访问）
+  if (element && element.setAttribute) {
+    try {
+      element.setAttribute('data-oit-id', elementId);
+      element.setAttribute('data-oit-translated', 'true');
+    } catch (e) {
+      // 跨域限制，忽略
+    }
+  }
+  
+  console.log('[OIT-PDF] Translation applied to sidebar:', text?.substring(0, 30));
+}
+
+/**
+ * 生成元素唯一ID
+ */
+function generateElementId(element) {
+  const rect = element.getBoundingClientRect();
+  const text = element.textContent?.substring(0, 20) || '';
+  return `oit-${Math.round(rect.top)}-${Math.round(rect.left)}-${text.length}`;
+}
+
+/**
+ * 更新PDF侧边栏内容
+ */
+function updatePdfSidebar() {
+  if (!pdfSidebar) return;
+  
+  const content = pdfSidebar.querySelector('#oit-pdf-sidebar-content');
+  if (!content) return;
+  
+  // 按位置排序
+  const sortedTranslations = Array.from(pdfTranslations.values())
+    .sort((a, b) => a.position - b.position);
+  
+  if (sortedTranslations.length === 0) {
+    content.innerHTML = '<div class="oit-pdf-sidebar-empty">当前页面暂无翻译内容</div>';
+    return;
+  }
+  
+  // 生成HTML
+  let html = '';
+  sortedTranslations.forEach((item, index) => {
+    html += `
+      <div class="oit-pdf-translation-item" data-oit-id="${item.element?.getAttribute('data-oit-id') || index}">
+        <div class="oit-pdf-translation-original">${escapeHtml(item.original)}</div>
+        <div class="oit-pdf-translation-result">${escapeHtml(item.translation)}</div>
+      </div>
+    `;
+  });
+  
+  content.innerHTML = html;
+  
+  // 添加点击高亮功能
+  content.querySelectorAll('.oit-pdf-translation-item').forEach(item => {
+    item.addEventListener('click', () => {
+      const elementId = item.getAttribute('data-oit-id');
+      const translation = sortedTranslations.find(t => 
+        t.element?.getAttribute('data-oit-id') === elementId
+      );
+      if (translation?.element) {
+        // 滚动到对应元素
+        translation.element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        // 高亮元素
+        highlightElement(translation.element);
+      }
+    });
+  });
+}
+
+/**
+ * 高亮元素（临时）
+ */
+function highlightElement(element) {
+  // 移除之前的高亮
+  document.querySelectorAll('.oit-pdf-highlight').forEach(el => {
+    el.classList.remove('oit-pdf-highlight');
+  });
+  
+  // 添加高亮
+  element.classList.add('oit-pdf-highlight');
+  
+  // 3秒后移除高亮
+  setTimeout(() => {
+    element.classList.remove('oit-pdf-highlight');
+  }, 3000);
+}
+
+/**
+ * 清除当前页面的PDF翻译
+ */
+function clearCurrentPagePdfTranslations() {
+  const viewportTop = window.scrollY;
+  const viewportBottom = viewportTop + window.innerHeight;
+  
+  // 清除视口外的翻译
+  for (const [id, item] of pdfTranslations.entries()) {
+    if (item.position < viewportTop - 100 || item.position > viewportBottom + 100) {
+      pdfTranslations.delete(id);
+      if (item.element) {
+        item.element.removeAttribute('data-oit-translated');
+        item.element.classList.remove('oit-pdf-highlight');
+      }
+    }
+  }
+  
+  // 更新侧边栏
+  updatePdfSidebar();
+}
+
 /**
  * 应用翻译到 DOM
  */
@@ -1465,6 +2332,23 @@ function removeAllTranslations() {
     el.classList.remove('oit-pending', 'oit-pending-dark', 'oit-translating-text');
   });
   
+  // 📄 PDF模式：清除侧边栏
+  if (state.isPdfPage) {
+    pdfTranslations.clear();
+    if (pdfSidebar) {
+      const content = pdfSidebar.querySelector('#oit-pdf-sidebar-content');
+      if (content) {
+        content.innerHTML = '<div class="oit-pdf-sidebar-empty">当前页面暂无翻译内容</div>';
+      }
+    }
+    // 清除元素标记
+    document.querySelectorAll('[data-oit-translated]').forEach(el => {
+      el.removeAttribute('data-oit-translated');
+      el.removeAttribute('data-oit-id');
+      el.classList.remove('oit-pdf-highlight');
+    });
+  }
+  
   // 处理 Twitter 等追加翻译的情况
   document.querySelectorAll('.oit-wrapper').forEach(wrapper => {
     // 如果是 Twitter 类型（翻译追加在后面）
@@ -1536,120 +2420,8 @@ function notifyProgress(current, total) {
   }
 }
 
-// ==================== 选中文本翻译 ====================
-
-let floatingBtn = null;
-let floatingPanel = null;
-
-document.addEventListener('mouseup', (e) => {
-  const selection = window.getSelection();
-  const selectedText = selection.toString().trim();
-  
-  if (selectedText.length < CONFIG.MIN_TEXT_LENGTH) {
-    hideFloating();
-    return;
-  }
-  
-  showFloatingButton(e.clientX, e.clientY, selectedText);
-});
-
-function showFloatingButton(x, y, text) {
-  hideFloating();
-  
-  floatingBtn = document.createElement('button');
-  floatingBtn.className = 'oit-floating-btn';
-  floatingBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none"><path d="M12.87 15.07l-2.54-2.51.03-.03A17.52 17.52 0 0014.07 6H17V4h-7V2H8v2H1v2h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11.76-2.04zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2l-4.5-12zm-2.62 7l1.62-4.33L19.12 17h-3.24z" fill="currentColor"/></svg>`;
-  floatingBtn.style.cssText = `position:fixed;left:${Math.min(x+10,window.innerWidth-50)}px;top:${Math.max(y-40,10)}px;z-index:2147483647;`;
-  
-  document.body.appendChild(floatingBtn);
-  
-  floatingBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    translateSelection(text, x, y);
-  });
-  
-  setTimeout(() => document.addEventListener('mousedown', hideOnClickOutside), 100);
-}
-
-function hideOnClickOutside(e) {
-  if (floatingBtn && !floatingBtn.contains(e.target) && 
-      (!floatingPanel || !floatingPanel.contains(e.target))) {
-    hideFloating();
-  }
-}
-
-function hideFloating() {
-  if (floatingBtn) { floatingBtn.remove(); floatingBtn = null; }
-  if (floatingPanel) { floatingPanel.remove(); floatingPanel = null; }
-  document.removeEventListener('mousedown', hideOnClickOutside);
-}
-
-async function translateSelection(text, x, y) {
-  // 🔥 检查扩展上下文
-  if (!isExtensionContextValid()) {
-    showContextInvalidatedWarning();
-    return;
-  }
-  
-  hideFloating();
-  
-  floatingPanel = document.createElement('div');
-  floatingPanel.className = 'oit-floating-panel';
-  floatingPanel.innerHTML = `<div class="oit-panel-loading"><div class="oit-spinner"></div><span>翻译中...</span></div>`;
-  floatingPanel.style.cssText = `position:fixed;left:${Math.min(x,window.innerWidth-320)}px;top:${Math.min(y+10,window.innerHeight-200)}px;z-index:2147483647;`;
-  
-  document.body.appendChild(floatingPanel);
-  
-  try {
-    // 🔥 使用新配置系统
-    const config = await loadFullConfig();
-    
-    // 检查是否需要 API Key
-    const needsApiKey = checkNeedsApiKey(config.provider);
-    if (needsApiKey && !config.apiKey) {
-      floatingPanel.innerHTML = `<div class="oit-panel-error">请先在插件设置中配置 API 密钥</div>`;
-      return;
-    }
-    
-    const response = await chrome.runtime.sendMessage({
-      action: 'translate',
-      texts: [text],
-      config: config
-    });
-    
-    if (response.error) throw new Error(response.error);
-    
-    const translation = response.translations[0];
-    
-    floatingPanel.innerHTML = `
-      <div class="oit-panel-content">
-        <div class="oit-panel-original">${escapeHtml(text)}</div>
-        <div class="oit-panel-divider"></div>
-        <div class="oit-panel-translation">${escapeHtml(translation)}</div>
-        <div class="oit-panel-actions">
-          <button class="oit-copy-btn" title="复制"><svg viewBox="0 0 24 24" fill="none"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z" fill="currentColor"/></svg></button>
-          <button class="oit-close-btn" title="关闭"><svg viewBox="0 0 24 24" fill="none"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" fill="currentColor"/></svg></button>
-        </div>
-      </div>`;
-    
-    floatingPanel.querySelector('.oit-copy-btn').onclick = () => {
-      navigator.clipboard.writeText(translation);
-      floatingPanel.querySelector('.oit-copy-btn').innerHTML = '<span style="font-size:12px">✓</span>';
-    };
-    floatingPanel.querySelector('.oit-close-btn').onclick = hideFloating;
-    
-  } catch (error) {
-    // 🔥 检查上下文失效错误
-    if (error.message?.includes('Extension context invalidated')) {
-      showContextInvalidatedWarning();
-      if (floatingPanel) {
-        floatingPanel.innerHTML = `<div class="oit-panel-error">请刷新页面后重试</div>`;
-      }
-    } else {
-      floatingPanel.innerHTML = `<div class="oit-panel-error">${escapeHtml(error.message)}</div>`;
-    }
-  }
-}
+// ==================== 选中文本翻译（已移除，仅保留手动翻译） ====================
+// PDF模式下只使用侧边栏手动翻译，不显示选中文本的浮动按钮
 
 // ==================== 悬浮翻译按钮 (FAB) ====================
 
