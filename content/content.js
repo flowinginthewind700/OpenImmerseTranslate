@@ -1701,10 +1701,31 @@ function createPdfSidebar() {
   pdfSidebar.id = 'oit-pdf-sidebar';
   pdfSidebar.className = 'oit-pdf-sidebar';
   pdfSidebar.innerHTML = `
+    <div class="oit-pdf-sidebar-resizer" id="oit-pdf-sidebar-resizer"></div>
+    <div class="oit-pdf-sidebar-resizer-bottom" id="oit-pdf-sidebar-resizer-bottom"></div>
     <div class="oit-pdf-sidebar-header">
       <span class="oit-pdf-sidebar-title">📄 翻译面板</span>
+      <button class="oit-pdf-sidebar-settings" title="设置">⚙</button>
       <button class="oit-pdf-sidebar-toggle" title="收起/展开">−</button>
       <button class="oit-pdf-sidebar-close" title="关闭">×</button>
+    </div>
+    <div class="oit-pdf-sidebar-settings-panel" id="oit-pdf-sidebar-settings-panel" style="display: none;">
+      <div class="oit-pdf-settings-item">
+        <label>宽度：</label>
+        <input type="range" id="oit-pdf-width-slider" min="300" max="800" value="380" step="10">
+        <span id="oit-pdf-width-value">380px</span>
+      </div>
+      <div class="oit-pdf-settings-item">
+        <label>高度：</label>
+        <input type="range" id="oit-pdf-height-slider" min="400" max="900" value="600" step="10">
+        <span id="oit-pdf-height-value">600px</span>
+      </div>
+      <div class="oit-pdf-settings-item">
+        <label>字体大小：</label>
+        <input type="range" id="oit-pdf-font-slider" min="12" max="20" value="14" step="1">
+        <span id="oit-pdf-font-value">14px</span>
+      </div>
+      <button class="oit-pdf-settings-close" title="关闭设置">✓</button>
     </div>
     <div class="oit-pdf-sidebar-tabs">
       <button class="oit-pdf-tab active" data-tab="translations">翻译列表</button>
@@ -1920,10 +1941,11 @@ function createPdfSidebar() {
   let startX, startY, startLeft, startTop;
   
   const header = pdfSidebar.querySelector('.oit-pdf-sidebar-header');
+  const settingsBtn = pdfSidebar.querySelector('.oit-pdf-sidebar-settings');
   
   // 鼠标事件
   header.addEventListener('mousedown', (e) => {
-    if (e.target === toggleBtn || e.target === closeBtn) return;
+    if (e.target === toggleBtn || e.target === closeBtn || e.target === settingsBtn) return;
     isDragging = true;
     startX = e.clientX;
     startY = e.clientY;
@@ -1936,7 +1958,7 @@ function createPdfSidebar() {
   
   // 触摸事件
   header.addEventListener('touchstart', (e) => {
-    if (e.target === toggleBtn || e.target === closeBtn) return;
+    if (e.target === toggleBtn || e.target === closeBtn || e.target === settingsBtn) return;
     isDragging = true;
     const touch = e.touches[0];
     startX = touch.clientX;
@@ -1981,8 +2003,218 @@ function createPdfSidebar() {
   document.addEventListener('touchend', handleEnd);
   document.addEventListener('touchcancel', handleEnd);
   
+  // 加载保存的设置
+  loadPdfSidebarSettings();
+  
+  // 设置面板功能
+  const settingsPanel = pdfSidebar.querySelector('#oit-pdf-sidebar-settings-panel');
+  const settingsCloseBtn = pdfSidebar.querySelector('.oit-pdf-settings-close');
+  const widthSlider = pdfSidebar.querySelector('#oit-pdf-width-slider');
+  const widthValue = pdfSidebar.querySelector('#oit-pdf-width-value');
+  const heightSlider = pdfSidebar.querySelector('#oit-pdf-height-slider');
+  const heightValue = pdfSidebar.querySelector('#oit-pdf-height-value');
+  const fontSlider = pdfSidebar.querySelector('#oit-pdf-font-slider');
+  const fontValue = pdfSidebar.querySelector('#oit-pdf-font-value');
+  
+  // 打开/关闭设置面板
+  settingsBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    settingsPanel.style.display = settingsPanel.style.display === 'none' ? 'block' : 'none';
+  });
+  
+  settingsCloseBtn.addEventListener('click', () => {
+    settingsPanel.style.display = 'none';
+  });
+  
+  // 宽度调整
+  widthSlider.addEventListener('input', (e) => {
+    const width = parseInt(e.target.value);
+    widthValue.textContent = width + 'px';
+    pdfSidebar.style.width = width + 'px';
+    savePdfSidebarSettings();
+  });
+  
+  // 高度调整
+  heightSlider.addEventListener('input', (e) => {
+    const height = parseInt(e.target.value);
+    const maxHeight = Math.min(900, window.innerHeight - 100); // 考虑视口高度
+    const finalHeight = Math.min(height, maxHeight);
+    heightValue.textContent = finalHeight + 'px';
+    pdfSidebar.style.height = finalHeight + 'px';
+    if (finalHeight < height) {
+      heightSlider.value = finalHeight;
+    }
+    savePdfSidebarSettings();
+  });
+  
+  // 字体大小调整
+  fontSlider.addEventListener('input', (e) => {
+    const fontSize = parseInt(e.target.value);
+    fontValue.textContent = fontSize + 'px';
+    pdfSidebar.style.setProperty('--pdf-sidebar-font-size', fontSize + 'px');
+    savePdfSidebarSettings();
+  });
+  
+  // 宽度调整器（左侧边缘拖拽）
+  const resizer = pdfSidebar.querySelector('#oit-pdf-sidebar-resizer');
+  let isResizing = false;
+  let resizeStartX = 0;
+  let resizeStartWidth = 0;
+  
+  resizer.addEventListener('mousedown', (e) => {
+    isResizing = true;
+    resizeStartX = e.clientX;
+    resizeStartWidth = pdfSidebar.offsetWidth;
+    pdfSidebar.style.transition = 'none';
+    e.preventDefault();
+  });
+  
+  resizer.addEventListener('touchstart', (e) => {
+    isResizing = true;
+    resizeStartX = e.touches[0].clientX;
+    resizeStartWidth = pdfSidebar.offsetWidth;
+    pdfSidebar.style.transition = 'none';
+    e.preventDefault();
+  }, { passive: false });
+  
+  const handleResize = (e) => {
+    if (!isResizing) return;
+    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+    const deltaX = resizeStartX - clientX; // 向左拖拽增加宽度
+    const newWidth = Math.max(300, Math.min(800, resizeStartWidth + deltaX));
+    pdfSidebar.style.width = newWidth + 'px';
+    widthSlider.value = newWidth;
+    widthValue.textContent = newWidth + 'px';
+    e.preventDefault();
+  };
+  
+  const handleResizeEnd = () => {
+    if (isResizing) {
+      isResizing = false;
+      pdfSidebar.style.transition = '';
+      savePdfSidebarSettings();
+    }
+  };
+  
+  document.addEventListener('mousemove', handleResize);
+  document.addEventListener('touchmove', handleResize, { passive: false });
+  document.addEventListener('mouseup', handleResizeEnd);
+  document.addEventListener('touchend', handleResizeEnd);
+  
+  // 高度调整器（底部边缘拖拽）
+  const resizerBottom = pdfSidebar.querySelector('#oit-pdf-sidebar-resizer-bottom');
+  let isResizingHeight = false;
+  let resizeStartY = 0;
+  let resizeStartHeight = 0;
+  
+  resizerBottom.addEventListener('mousedown', (e) => {
+    isResizingHeight = true;
+    resizeStartY = e.clientY;
+    resizeStartHeight = pdfSidebar.offsetHeight;
+    pdfSidebar.style.transition = 'none';
+    e.preventDefault();
+  });
+  
+  resizerBottom.addEventListener('touchstart', (e) => {
+    isResizingHeight = true;
+    resizeStartY = e.touches[0].clientY;
+    resizeStartHeight = pdfSidebar.offsetHeight;
+    pdfSidebar.style.transition = 'none';
+    e.preventDefault();
+  }, { passive: false });
+  
+  const handleResizeHeight = (e) => {
+    if (!isResizingHeight) return;
+    const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+    const deltaY = clientY - resizeStartY; // 向下拖拽增加高度
+    const maxHeight = Math.min(900, window.innerHeight - 100); // 考虑视口高度
+    const newHeight = Math.max(400, Math.min(maxHeight, resizeStartHeight + deltaY));
+    pdfSidebar.style.height = newHeight + 'px';
+    heightSlider.value = newHeight;
+    heightValue.textContent = newHeight + 'px';
+    e.preventDefault();
+  };
+  
+  const handleResizeHeightEnd = () => {
+    if (isResizingHeight) {
+      isResizingHeight = false;
+      pdfSidebar.style.transition = '';
+      savePdfSidebarSettings();
+    }
+  };
+  
+  document.addEventListener('mousemove', handleResizeHeight);
+  document.addEventListener('touchmove', handleResizeHeight, { passive: false });
+  document.addEventListener('mouseup', handleResizeHeightEnd);
+  document.addEventListener('touchend', handleResizeHeightEnd);
+  
   console.log('[OIT-PDF] Sidebar created');
   return pdfSidebar;
+}
+
+/**
+ * 加载PDF侧边栏设置
+ */
+async function loadPdfSidebarSettings() {
+  if (!pdfSidebar) return;
+  
+  try {
+    const result = await safeChrome(
+      () => chrome.storage.local.get(['pdfSidebarWidth', 'pdfSidebarHeight', 'pdfSidebarFontSize']),
+      { pdfSidebarWidth: 380, pdfSidebarHeight: 600, pdfSidebarFontSize: 14 }
+    );
+    
+    const width = result?.pdfSidebarWidth || 380;
+    const height = result?.pdfSidebarHeight || 600;
+    const fontSize = result?.pdfSidebarFontSize || 14;
+    
+    pdfSidebar.style.width = width + 'px';
+    pdfSidebar.style.height = height + 'px';
+    pdfSidebar.style.setProperty('--pdf-sidebar-font-size', fontSize + 'px');
+    
+    const widthSlider = pdfSidebar.querySelector('#oit-pdf-width-slider');
+    const widthValue = pdfSidebar.querySelector('#oit-pdf-width-value');
+    const heightSlider = pdfSidebar.querySelector('#oit-pdf-height-slider');
+    const heightValue = pdfSidebar.querySelector('#oit-pdf-height-value');
+    const fontSlider = pdfSidebar.querySelector('#oit-pdf-font-slider');
+    const fontValue = pdfSidebar.querySelector('#oit-pdf-font-value');
+    
+    if (widthSlider) {
+      widthSlider.value = width;
+      if (widthValue) widthValue.textContent = width + 'px';
+    }
+    if (heightSlider) {
+      heightSlider.value = height;
+      if (heightValue) heightValue.textContent = height + 'px';
+    }
+    if (fontSlider) {
+      fontSlider.value = fontSize;
+      if (fontValue) fontValue.textContent = fontSize + 'px';
+    }
+  } catch (e) {
+    console.error('[OIT-PDF] Failed to load settings:', e);
+  }
+}
+
+/**
+ * 保存PDF侧边栏设置
+ */
+async function savePdfSidebarSettings() {
+  if (!pdfSidebar) return;
+  
+  try {
+    const width = parseInt(pdfSidebar.style.width) || 380;
+    const height = parseInt(pdfSidebar.style.height) || 600;
+    const fontSize = parseInt(pdfSidebar.style.getPropertyValue('--pdf-sidebar-font-size')) || 14;
+    
+    await safeChrome(() => chrome.storage.local.set({
+      pdfSidebarWidth: width,
+      pdfSidebarHeight: height,
+      pdfSidebarFontSize: fontSize
+    }));
+  } catch (e) {
+    console.error('[OIT-PDF] Failed to save settings:', e);
+  }
 }
 
 /**

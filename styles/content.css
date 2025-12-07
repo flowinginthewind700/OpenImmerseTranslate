@@ -620,6 +620,7 @@ a .oit-translation::after {
   right: 20px;
   top: 80px;
   width: 380px;
+  height: 600px;
   max-width: calc(100vw - 40px);
   max-height: calc(100vh - 100px);
   background: white;
@@ -629,9 +630,74 @@ a .oit-translation::after {
   display: flex;
   flex-direction: column;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans SC', sans-serif;
+  --pdf-sidebar-font-size: 14px;
+  font-size: var(--pdf-sidebar-font-size);
   transition: all 0.3s ease;
   overflow: hidden;
   touch-action: none; /* 防止触摸滚动冲突 */
+}
+
+/* 宽度调整器（左侧边缘） */
+.oit-pdf-sidebar-resizer {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  cursor: ew-resize;
+  z-index: 10;
+  background: transparent;
+  transition: background 0.2s ease;
+}
+
+.oit-pdf-sidebar-resizer:hover {
+  background: rgba(124, 58, 237, 0.3);
+}
+
+.oit-pdf-sidebar-resizer:active {
+  background: rgba(124, 58, 237, 0.5);
+}
+
+/* 高度调整器（底部边缘） */
+.oit-pdf-sidebar-resizer-bottom {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 4px;
+  cursor: ns-resize;
+  z-index: 10;
+  background: transparent;
+  transition: background 0.2s ease;
+}
+
+.oit-pdf-sidebar-resizer-bottom:hover {
+  background: rgba(124, 58, 237, 0.3);
+}
+
+.oit-pdf-sidebar-resizer-bottom:active {
+  background: rgba(124, 58, 237, 0.5);
+}
+
+/* 高度调整器（底部边缘） */
+.oit-pdf-sidebar-resizer-bottom {
+  position: absolute;
+  left: 4px; /* 避免与宽度调整器重叠 */
+  right: 0;
+  bottom: 0;
+  height: 4px;
+  cursor: ns-resize;
+  z-index: 10;
+  background: transparent;
+  transition: background 0.2s ease;
+}
+
+.oit-pdf-sidebar-resizer-bottom:hover {
+  background: rgba(124, 58, 237, 0.3);
+}
+
+.oit-pdf-sidebar-resizer-bottom:active {
+  background: rgba(124, 58, 237, 0.5);
 }
 
 /* 平板设备适配 */
@@ -642,6 +708,11 @@ a .oit-translation::after {
     left: 20px;
     max-width: 500px;
     margin: 0 auto;
+  }
+  
+  .oit-pdf-sidebar-resizer,
+  .oit-pdf-sidebar-resizer-bottom {
+    display: none;
   }
 }
 
@@ -657,7 +728,11 @@ a .oit-translation::after {
   width: 60px;
 }
 
-.oit-pdf-sidebar.collapsed .oit-pdf-sidebar-content {
+.oit-pdf-sidebar.collapsed .oit-pdf-sidebar-content,
+.oit-pdf-sidebar.collapsed .oit-pdf-sidebar-manual,
+.oit-pdf-sidebar.collapsed .oit-pdf-sidebar-settings-panel,
+.oit-pdf-sidebar.collapsed .oit-pdf-sidebar-resizer,
+.oit-pdf-sidebar.collapsed .oit-pdf-sidebar-resizer-bottom {
   display: none;
 }
 
@@ -694,7 +769,7 @@ a .oit-translation::after {
   border: none;
   background: transparent;
   color: #666;
-  font-size: 14px;
+  font-size: var(--pdf-sidebar-font-size, 14px);
   cursor: pointer;
   border-bottom: 2px solid transparent;
   transition: all 0.2s ease;
@@ -732,7 +807,12 @@ a .oit-translation::after {
 
 /* 手动翻译区域 */
 .oit-pdf-sidebar-manual {
+  flex: 1;
+  overflow-y: auto;
   padding: 16px;
+  min-height: 0; /* 允许 flex 子元素缩小 */
+  display: flex;
+  flex-direction: column;
 }
 
 .oit-pdf-manual-input {
@@ -745,7 +825,7 @@ a .oit-translation::after {
   padding: 12px;
   border: 1px solid #ddd;
   border-radius: 8px;
-  font-size: 14px;
+  font-size: var(--pdf-sidebar-font-size, 14px);
   font-family: inherit;
   resize: vertical;
   box-sizing: border-box;
@@ -767,7 +847,7 @@ a .oit-translation::after {
   color: white;
   border: none;
   border-radius: 8px;
-  font-size: 15px;
+  font-size: calc(var(--pdf-sidebar-font-size, 14px) + 1px);
   font-weight: 600;
   cursor: pointer;
   transition: all 0.2s ease;
@@ -782,7 +862,12 @@ a .oit-translation::after {
 }
 
 .oit-pdf-manual-result {
+  flex: 1;
   margin-top: 16px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 4px; /* 为滚动条留出空间 */
+  min-height: 0; /* 允许 flex 子元素缩小 */
 }
 
 .oit-pdf-manual-loading {
@@ -810,7 +895,7 @@ a .oit-translation::after {
   padding: 12px;
   background: #f0f9ff;
   border-radius: 8px;
-  font-size: 13px;
+  font-size: var(--pdf-sidebar-font-size, 14px);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -852,7 +937,7 @@ a .oit-translation::after {
   background: #f0f0f0;
   border: 1px solid #ddd;
   border-radius: 6px;
-  font-size: 14px;
+  font-size: var(--pdf-sidebar-font-size, 14px);
   cursor: pointer;
   transition: all 0.2s ease;
   touch-action: manipulation;
@@ -877,11 +962,12 @@ a .oit-translation::after {
 }
 
 .oit-pdf-sidebar-title {
-  font-size: 14px;
+  font-size: var(--pdf-sidebar-font-size, 14px);
   font-weight: 600;
   flex: 1;
 }
 
+.oit-pdf-sidebar-settings,
 .oit-pdf-sidebar-toggle,
 .oit-pdf-sidebar-close {
   width: 32px;
@@ -904,11 +990,119 @@ a .oit-translation::after {
   -webkit-tap-highlight-color: transparent;
 }
 
+.oit-pdf-sidebar-settings:hover,
 .oit-pdf-sidebar-toggle:hover,
 .oit-pdf-sidebar-close:hover,
+.oit-pdf-sidebar-settings:active,
 .oit-pdf-sidebar-toggle:active,
 .oit-pdf-sidebar-close:active {
   background: rgba(255, 255, 255, 0.3);
+}
+
+/* 设置面板 */
+.oit-pdf-sidebar-settings-panel {
+  position: absolute;
+  top: 50px;
+  right: 0;
+  background: white;
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+  padding: 16px;
+  z-index: 1000;
+  min-width: 240px;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+}
+
+@media (prefers-color-scheme: dark) {
+  .oit-pdf-sidebar-settings-panel {
+    background: #2a2a3e;
+    border-color: rgba(255, 255, 255, 0.1);
+  }
+}
+
+.oit-pdf-settings-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.oit-pdf-settings-item:last-of-type {
+  margin-bottom: 0;
+}
+
+.oit-pdf-settings-item label {
+  font-size: 13px;
+  color: #666;
+  min-width: 60px;
+  font-weight: 500;
+}
+
+@media (prefers-color-scheme: dark) {
+  .oit-pdf-settings-item label {
+    color: #999;
+  }
+}
+
+.oit-pdf-settings-item input[type="range"] {
+  flex: 1;
+  height: 4px;
+  border-radius: 2px;
+  background: #e0e0e0;
+  outline: none;
+  -webkit-appearance: none;
+}
+
+@media (prefers-color-scheme: dark) {
+  .oit-pdf-settings-item input[type="range"] {
+    background: #444;
+  }
+}
+
+.oit-pdf-settings-item input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #7c3aed;
+  cursor: pointer;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+
+.oit-pdf-settings-item input[type="range"]::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #7c3aed;
+  cursor: pointer;
+  border: none;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+
+.oit-pdf-settings-item span {
+  font-size: 12px;
+  color: #7c3aed;
+  min-width: 45px;
+  text-align: right;
+  font-weight: 600;
+}
+
+.oit-pdf-settings-close {
+  width: 100%;
+  padding: 8px;
+  margin-top: 12px;
+  background: #7c3aed;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  transition: background 0.2s ease;
+}
+
+.oit-pdf-settings-close:hover {
+  background: #6d28d9;
 }
 
 /* 侧边栏内容 */
@@ -916,13 +1110,14 @@ a .oit-translation::after {
   flex: 1;
   overflow-y: auto;
   padding: 16px;
-  max-height: calc(100vh - 140px);
+  min-height: 0; /* 允许 flex 子元素缩小 */
+  font-size: var(--pdf-sidebar-font-size, 14px);
 }
 
 .oit-pdf-sidebar-empty {
   text-align: center;
   color: #999;
-  font-size: 14px;
+  font-size: var(--pdf-sidebar-font-size, 14px);
   padding: 40px 20px;
 }
 
@@ -961,7 +1156,7 @@ a .oit-translation::after {
 }
 
 .oit-pdf-translation-original {
-  font-size: 13px;
+  font-size: calc(var(--pdf-sidebar-font-size, 14px) - 1px);
   color: #666;
   line-height: 1.6;
   margin-bottom: 8px;
@@ -975,7 +1170,7 @@ a .oit-translation::after {
 }
 
 .oit-pdf-translation-result {
-  font-size: 15px;
+  font-size: calc(var(--pdf-sidebar-font-size, 14px) + 1px);
   color: #333;
   line-height: 1.7;
   font-weight: 500;
@@ -996,29 +1191,35 @@ a .oit-translation::after {
 }
 
 /* 滚动条样式 */
-.oit-pdf-sidebar-content::-webkit-scrollbar {
+.oit-pdf-sidebar-content::-webkit-scrollbar,
+.oit-pdf-manual-result::-webkit-scrollbar {
   width: 6px;
 }
 
-.oit-pdf-sidebar-content::-webkit-scrollbar-track {
+.oit-pdf-sidebar-content::-webkit-scrollbar-track,
+.oit-pdf-manual-result::-webkit-scrollbar-track {
   background: transparent;
 }
 
-.oit-pdf-sidebar-content::-webkit-scrollbar-thumb {
+.oit-pdf-sidebar-content::-webkit-scrollbar-thumb,
+.oit-pdf-manual-result::-webkit-scrollbar-thumb {
   background: #ccc;
   border-radius: 3px;
 }
 
-.oit-pdf-sidebar-content::-webkit-scrollbar-thumb:hover {
+.oit-pdf-sidebar-content::-webkit-scrollbar-thumb:hover,
+.oit-pdf-manual-result::-webkit-scrollbar-thumb:hover {
   background: #aaa;
 }
 
 @media (prefers-color-scheme: dark) {
-  .oit-pdf-sidebar-content::-webkit-scrollbar-thumb {
+  .oit-pdf-sidebar-content::-webkit-scrollbar-thumb,
+  .oit-pdf-manual-result::-webkit-scrollbar-thumb {
     background: #444;
   }
   
-  .oit-pdf-sidebar-content::-webkit-scrollbar-thumb:hover {
+  .oit-pdf-sidebar-content::-webkit-scrollbar-thumb:hover,
+  .oit-pdf-manual-result::-webkit-scrollbar-thumb:hover {
     background: #555;
   }
 }
