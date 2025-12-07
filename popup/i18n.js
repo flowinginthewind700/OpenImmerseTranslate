@@ -132,7 +132,12 @@ const LANGUAGES = {
     errorInvalidResponse: 'AI 返回了无效的响应',
     errorModelNotFound: '🤖 模型不存在，请检查模型名称',
     errorPermissionDenied: '🚫 没有权限访问此 API',
-    errorUnknown: '❓ 发生未知错误'
+    errorUnknown: '❓ 发生未知错误',
+    
+    // GitHub 链接
+    releases: '版本',
+    feedback: '反馈',
+    website: '官网'
   },
   
   'en': {
@@ -264,7 +269,12 @@ const LANGUAGES = {
     errorInvalidResponse: 'Invalid response from AI',
     errorModelNotFound: '🤖 Model not found. Check model name',
     errorPermissionDenied: '🚫 Permission denied for this API',
-    errorUnknown: '❓ An unknown error occurred'
+    errorUnknown: '❓ An unknown error occurred',
+    
+    // GitHub links
+    releases: 'Releases',
+    feedback: 'Feedback',
+    website: 'Website'
   }
 };
 
