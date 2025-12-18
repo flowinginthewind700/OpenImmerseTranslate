@@ -11,3 +11,5 @@ echo "----------------------------------------"
 OLLAMA_ORIGINS="*" ollama serve
 
 
+
+

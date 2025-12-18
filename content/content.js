@@ -215,9 +215,19 @@ class TranslationState {
     this.translationQueue = []; // 待翻译队列
     this.activeTranslations = 0; // 当前并发数
     this.isProcessing = false; // 是否正在处理队列
+    
+    // 🔥 翻译会话标识：用于区分不同的翻译会话，防止旧请求干扰新翻译
+    this.epoch = 0;
   }
   
+  /**
+   * 完全重置状态（开始新翻译前调用）
+   * 🔥 关键：增加 epoch 使所有旧请求失效
+   */
   reset() {
+    // 🔥 增加 epoch，使所有进行中的旧请求在完成时被忽略
+    this.epoch++;
+    
     this.isActive = false;
     this.shouldStop = false;
     this.translatedCount = 0;
@@ -243,6 +253,15 @@ class TranslationState {
       window.removeEventListener('scroll', this.scrollHandler);
       this.scrollHandler = null;
     }
+    
+    console.log(`[OIT] State reset, new epoch: ${this.epoch}`);
+  }
+  
+  /**
+   * 检查给定的 epoch 是否仍然是当前会话
+   */
+  isCurrentEpoch(epoch) {
+    return this.epoch === epoch;
   }
 }
 
@@ -369,17 +388,20 @@ function resetFabToIdle() {
 
 /**
  * 开始翻译 - 流式翻译策略
- * 🚀 核心优化：单条翻译 + 并发控制 + 即时显示
+ * 🚀 核心优化：单条翻译 + 并发控制 + 即时显示 + epoch 会话管理
  */
 function startTranslation(config) {
   if (state.isActive) {
-    console.log('[OpenImmerseTranslate] Already translating');
+    console.log('[OIT] Already translating, ignoring request');
     return;
   }
   
+  // 🔥 重置状态（会增加 epoch，使旧请求失效）
   state.reset();
   state.config = config;
   state.isActive = true;
+  
+  console.log(`[OIT] Starting translation with epoch ${state.epoch}`);
   
   const startTime = performance.now();
   sendLog('🚀 开始扫描页面...', 'info');
@@ -437,22 +459,30 @@ function addToQueue(block) {
 
 /**
  * 处理翻译队列（流式）
- * 🔥 核心：并发控制 + 即时显示
+ * 🔥 核心：并发控制 + 即时显示 + epoch 验证
  */
 async function processQueue() {
   if (state.isProcessing) return;
   if (!state.isActive || state.shouldStop) return;
   
+  // 🔥 记录开始时的 epoch
+  const startEpoch = state.epoch;
   state.isProcessing = true;
   
   while (state.translationQueue.length > 0 && state.isActive && !state.shouldStop) {
+    // 🔥 检查 epoch 是否变化（用户停止/重新开始了翻译）
+    if (!state.isCurrentEpoch(startEpoch)) {
+      console.log('[OIT] Epoch changed during queue processing, stopping');
+      break;
+    }
+    
     // 并发控制：等待有空闲槽位
     while (state.activeTranslations >= CONFIG.MAX_CONCURRENT) {
       await sleep(50);
-      if (!state.isActive || state.shouldStop) break;
+      if (!state.isActive || state.shouldStop || !state.isCurrentEpoch(startEpoch)) break;
     }
     
-    if (!state.isActive || state.shouldStop) break;
+    if (!state.isActive || state.shouldStop || !state.isCurrentEpoch(startEpoch)) break;
     
     // 取出一个任务
     const block = state.translationQueue.shift();
@@ -467,8 +497,12 @@ async function processQueue() {
 
 /**
  * 单条翻译（异步，不阻塞）
+ * 🔥 使用 epoch 机制确保旧请求不会影响新翻译会话
  */
 async function translateSingle(block) {
+  // 🔥 记录当前 epoch，用于后续检查
+  const currentEpoch = state.epoch;
+  
   // 🔥 检查扩展上下文
   if (!isExtensionContextValid()) {
     showContextInvalidatedWarning();
@@ -492,7 +526,17 @@ async function translateSingle(block) {
       config: state.config
     });
     
-    if (!state.isActive || state.shouldStop) return;
+    // 🔥 关键检查：如果 epoch 已变化，说明用户已停止/重新开始翻译，丢弃此响应
+    if (!state.isCurrentEpoch(currentEpoch)) {
+      console.log('[OIT] Discarding stale response from epoch', currentEpoch, 'current:', state.epoch);
+      removePendingMark(block.element);
+      return;
+    }
+    
+    if (!state.isActive || state.shouldStop) {
+      removePendingMark(block.element);
+      return;
+    }
     
     if (response.error) {
       console.error('[OIT] Translation error:', response.error);
@@ -525,12 +569,16 @@ async function translateSingle(block) {
     console.error('[OIT] Translation failed:', error);
     removePendingMark(block.element);
   } finally {
-    state.activeTranslations--;
-    
-    // 如果队列还有内容，继续处理
-    if (state.translationQueue.length > 0 && !state.isProcessing) {
-      processQueue();
+    // 🔥 只有当前 epoch 有效时才更新计数和处理队列
+    if (state.isCurrentEpoch(currentEpoch)) {
+      state.activeTranslations--;
+      
+      // 如果队列还有内容，继续处理
+      if (state.translationQueue.length > 0 && !state.isProcessing && state.isActive) {
+        processQueue();
+      }
     }
+    // 如果 epoch 已变，不做任何操作，避免干扰新会话
   }
 }
 
@@ -985,11 +1033,16 @@ function findFirstTextNode(element) {
 
 /**
  * 停止翻译
+ * 🔥 增强版：彻底清理队列和挂起状态
  */
 function stopTranslation() {
+  console.log('[OIT] Stopping translation, current epoch:', state.epoch);
+  
+  // 1. 先设置停止标志
   state.shouldStop = true;
   state.isActive = false;
   
+  // 2. 断开观察者
   if (state.observer) {
     state.observer.disconnect();
     state.observer = null;
@@ -1005,8 +1058,15 @@ function stopTranslation() {
     state.scrollHandler = null;
   }
   
+  // 3. 🔥 清理所有挂起的 UI 标记（重要：让页面恢复干净状态）
+  document.querySelectorAll('.oit-pending, .oit-pending-dark, .oit-translating-text').forEach(el => {
+    el.classList.remove('oit-pending', 'oit-pending-dark', 'oit-translating-text');
+  });
+  
+  // 4. 重置状态（这会增加 epoch，使所有进行中的请求失效）
   state.reset();
-  console.log('[OpenImmerseTranslate] Translation stopped');
+  
+  console.log('[OIT] Translation stopped, new epoch:', state.epoch);
 }
 
 /**

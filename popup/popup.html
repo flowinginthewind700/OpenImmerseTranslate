@@ -5,7 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Open Immerse Translate</title>
   <link rel="stylesheet" href="popup.css">
-  <script src="i18n.js"></script>
 </head>
 <body>
   <div class="container">
@@ -15,13 +14,9 @@
         <svg class="logo-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
           <path d="M12.87 15.07l-2.54-2.51.03-.03A17.52 17.52 0 0014.07 6H17V4h-7V2H8v2H1v2h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11.76-2.04zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2l-4.5-12zm-2.62 7l1.62-4.33L19.12 17h-3.24z" fill="currentColor"/>
         </svg>
-        <span class="logo-text" data-i18n="appName">Open Immerse</span>
+        <span class="logo-text">Open Immerse</span>
       </div>
       <div class="header-actions">
-        <select class="lang-select" id="langSelect" title="Language">
-          <option value="zh-CN">中文</option>
-          <option value="en">EN</option>
-        </select>
         <button class="icon-btn" id="settingsBtn" title="设置">
           <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
             <path d="M19.14 12.94c.04-.31.06-.63.06-.94 0-.31-.02-.63-.06-.94l2.03-1.58a.49.49 0 00.12-.61l-1.92-3.32a.488.488 0 00-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 00-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.04.31-.06.63-.06.94s.02.63.06.94l-2.03 1.58a.49.49 0 00-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z" fill="currentColor"/>
@@ -32,45 +27,19 @@
 
     <!-- 主内容区 -->
     <main class="main-content" id="mainContent">
-      <!-- 首次使用引导 (API未配置时显示) -->
-      <section class="setup-guide" id="setupGuide" style="display: none;">
-        <div class="guide-card" id="guideCard">
-          <div class="guide-icon">
-            <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-7 14c-.55 0-1-.45-1-1v-4c0-.55.45-1 1-1s1 .45 1 1v4c0 .55-.45 1-1 1zm1-8h-2V7h2v2z" fill="currentColor"/>
-            </svg>
-          </div>
-          <div class="guide-content">
-            <h3 data-i18n="setupGuide">🎯 首次使用？请先配置 API</h3>
-            <p data-i18n="setupGuideDesc">点击此处设置您的 AI 翻译服务</p>
-          </div>
-          <div class="guide-arrow">
-            <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <path d="M8.59 16.59L13.17 12 8.59 7.41 10 6l6 6-6 6-1.41-1.41z" fill="currentColor"/>
-            </svg>
-          </div>
-        </div>
-      </section>
-
       <!-- 快捷操作卡片 -->
       <section class="quick-actions">
         <button class="action-btn primary" id="translatePageBtn">
           <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <path d="M12.87 15.07l-2.54-2.51.03-.03A17.52 17.52 0 0014.07 6H17V4h-7V2H8v2H1v2h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11.76-2.04zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2l-4.5-12zm-2.62 7l1.62-4.33L19.12 17h-3.24z" fill="currentColor"/>
+            <path d="M21 4H11l-1-3H3c-1.1 0-2 .9-2 2v15c0 1.1.9 2 2 2h8l1 3h9c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zM7 16c-2.76 0-5-2.24-5-5s2.24-5 5-5c1.35 0 2.48.5 3.35 1.3L9.03 8.57c-.38-.36-1.04-.78-2.03-.78-1.74 0-3.15 1.44-3.15 3.21S5.26 14.21 7 14.21c2.01 0 2.76-1.44 2.89-2.19H7v-1.9h4.84c.05.25.08.49.08.75 0 3.01-2.02 5.13-4.92 5.13zm6.17-5h1.25c.37 1.37 1.34 2.5 2.77 3.25l-1.1 1.45c-1.9-1.05-3.04-2.77-3.17-4.7h.25zm9.83 9c0 .55-.45 1-1 1h-8l1-3h-1v-2h2v-2h-2v-2h2V9h-2V6h8c.55 0 1 .45 1 1v13z" fill="currentColor"/>
           </svg>
-          <span data-i18n="translatePage">翻译当前页面</span>
+          <span>翻译当前页面</span>
         </button>
         <button class="action-btn secondary" id="stopTranslateBtn" style="display: none;">
           <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
             <path d="M6 6h12v12H6z" fill="currentColor"/>
           </svg>
-          <span data-i18n="stopTranslate">停止翻译</span>
-        </button>
-        <button class="action-btn tertiary" id="restoreBtn" style="display: none;">
-          <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <path d="M12.5 8c-2.65 0-5.05.99-6.9 2.6L2 7v9h9l-3.62-3.62c1.39-1.16 3.16-1.88 5.12-1.88 3.54 0 6.55 2.31 7.6 5.5l2.37-.78C21.08 11.03 17.15 8 12.5 8z" fill="currentColor"/>
-          </svg>
-          <span data-i18n="restore">恢复原样</span>
+          <span>停止翻译</span>
         </button>
       </section>
 
@@ -83,97 +52,33 @@
             </svg>
           </div>
           <div class="status-text">
-            <span class="status-title" data-i18n="ready">就绪</span>
-            <span class="status-desc" data-i18n="readyDesc">点击上方按钮开始翻译</span>
+            <span class="status-title">就绪</span>
+            <span class="status-desc">点击上方按钮开始翻译</span>
           </div>
         </div>
       </section>
 
       <!-- 翻译设置预览 -->
       <section class="settings-preview">
-        <h3 class="section-title" data-i18n="currentConfig">当前配置</h3>
+        <h3 class="section-title">当前配置</h3>
         <div class="config-list">
           <div class="config-item">
-            <span class="config-label" data-i18n="translationService">翻译服务</span>
-            <span class="config-value" id="currentProvider">Google</span>
+            <span class="config-label">翻译服务</span>
+            <span class="config-value" id="currentProvider">OpenAI</span>
           </div>
           <div class="config-item">
-            <span class="config-label" data-i18n="targetLanguage">目标语言</span>
+            <span class="config-label">目标语言</span>
             <span class="config-value" id="currentTargetLang">简体中文</span>
           </div>
-          <div class="config-item clickable" id="apiStatusItem">
-            <span class="config-label" data-i18n="apiStatus">API状态</span>
+          <div class="config-item">
+            <span class="config-label">API状态</span>
             <span class="config-value status-indicator" id="apiStatus">
               <span class="status-dot"></span>
-              <span data-i18n="notConfigured">未配置</span>
+              未配置
             </span>
           </div>
-          <div class="config-item fab-toggle-item">
-            <span class="config-label" data-i18n="floatingButton">悬浮按钮</span>
-            <label class="toggle-switch-mini">
-              <input type="checkbox" id="fabToggle" checked>
-              <span class="toggle-slider-mini"></span>
-            </label>
-          </div>
         </div>
       </section>
-
-      <!-- 控制台日志区域 -->
-      <section class="console-section">
-        <div class="console-header">
-          <span class="console-title">
-            <svg viewBox="0 0 24 24" fill="none" width="14" height="14">
-              <path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zM4 12h4v2H4v-2zm10 6H4v-2h10v2zm6 0h-4v-2h4v2zm0-4H10v-2h10v2z" fill="currentColor"/>
-            </svg>
-            <span data-i18n="console">控制台</span>
-          </span>
-          <div class="console-actions">
-            <button class="console-btn" id="copyConsole" data-i18n-title="copyLog">
-              <svg viewBox="0 0 24 24" fill="none" width="12" height="12">
-                <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z" fill="currentColor"/>
-              </svg>
-            </button>
-            <button class="console-btn" id="clearConsole" data-i18n-title="clearLog">
-              <svg viewBox="0 0 24 24" fill="none" width="12" height="12">
-                <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" fill="currentColor"/>
-              </svg>
-            </button>
-          </div>
-        </div>
-        <div class="console-body" id="consoleBody">
-          <div class="console-line info">
-            <span class="console-time"></span>
-            <span class="console-msg" data-i18n="consoleReady">准备就绪，点击翻译开始</span>
-          </div>
-        </div>
-      </section>
-
-      <!-- GitHub 快捷链接 -->
-      <footer class="github-footer">
-        <a href="https://github.com/flowinginthewind700/OpenImmerseTranslate" target="_blank" class="github-link" title="GitHub">
-          <svg viewBox="0 0 24 24" fill="currentColor">
-            <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/>
-          </svg>
-        </a>
-        <a href="https://github.com/flowinginthewind700/OpenImmerseTranslate/releases" target="_blank" class="github-link" title="Releases">
-          <svg viewBox="0 0 24 24" fill="currentColor">
-            <path d="M5 20h14v-2H5v2zm7-18L5.33 9h3.54v4.67h6.26V9h3.54L12 2z"/>
-          </svg>
-          <span data-i18n="releases">版本</span>
-        </a>
-        <a href="https://github.com/flowinginthewind700/OpenImmerseTranslate/issues" target="_blank" class="github-link" title="Issues">
-          <svg viewBox="0 0 24 24" fill="currentColor">
-            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 17h-2v-2h2v2zm2.07-7.75l-.9.92C13.45 12.9 13 13.5 13 15h-2v-.5c0-1.1.45-2.1 1.17-2.83l1.24-1.26c.37-.36.59-.86.59-1.41 0-1.1-.9-2-2-2s-2 .9-2 2H8c0-2.21 1.79-4 4-4s4 1.79 4 4c0 .88-.36 1.68-.93 2.25z"/>
-          </svg>
-          <span data-i18n="feedback">反馈</span>
-        </a>
-        <a href="https://translate.mgx.world" target="_blank" class="github-link" title="Website">
-          <svg viewBox="0 0 24 24" fill="currentColor">
-            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/>
-          </svg>
-          <span data-i18n="website">官网</span>
-        </a>
-      </footer>
     </main>
 
     <!-- 设置面板 -->
@@ -183,44 +88,38 @@
           <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
             <path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z" fill="currentColor"/>
           </svg>
-          <span data-i18n="back">返回</span>
+          <span>返回</span>
         </button>
-        <h2 data-i18n="settings">设置</h2>
-        <button class="save-btn" id="saveSettingsBtn" data-i18n="save">保存</button>
+        <h2>设置</h2>
       </div>
 
       <div class="settings-content">
         <!-- LLM提供商选择 -->
         <section class="settings-section">
-          <h3 class="section-title" data-i18n="aiServiceConfig">🤖 AI 翻译服务</h3>
+          <h3 class="section-title">LLM服务配置</h3>
           
           <div class="form-group">
-            <label class="form-label" data-i18n="serviceProvider">服务提供商</label>
+            <label class="form-label">服务提供商</label>
             <select class="form-select" id="providerSelect">
-              <option value="deepseek" data-i18n="providerDeepSeek">⭐ DeepSeek (推荐)</option>
-              <option value="google" data-i18n="providerGoogle">Google 翻译 (免费)</option>
-              <option value="openai" data-i18n="providerOpenAI">OpenAI (GPT-4o)</option>
-              <option value="moonshot" data-i18n="providerMoonshot">Moonshot Kimi</option>
-              <option value="zhipu" data-i18n="providerZhipu">智谱 GLM</option>
-              <option value="anthropic" data-i18n="providerAnthropic">Anthropic Claude</option>
-              <option value="ollama" data-i18n="providerOllama">Ollama (本地)</option>
-              <option value="custom" data-i18n="providerCustom">自定义 OpenAI 兼容 API</option>
+              <option value="openai">OpenAI</option>
+              <option value="anthropic">Anthropic (Claude)</option>
+              <option value="deepseek">DeepSeek</option>
+              <option value="moonshot">Moonshot (Kimi)</option>
+              <option value="zhipu">智谱 (GLM)</option>
+              <option value="custom">自定义 API</option>
             </select>
-            <div class="provider-hint" id="providerHint">
-              选择您的 AI 服务提供商，或选择「自定义」填入任意 OpenAI 兼容的 API
-            </div>
           </div>
 
           <div class="form-group">
-            <label class="form-label" data-i18n="apiAddress">API 地址 (Base URL)</label>
+            <label class="form-label">API 地址</label>
             <input type="text" class="form-input" id="apiEndpoint" placeholder="https://api.openai.com/v1/chat/completions">
           </div>
 
           <div class="form-group">
-            <label class="form-label" data-i18n="apiKey">API 密钥 (API Key)</label>
+            <label class="form-label">API 密钥</label>
             <div class="input-with-action">
-              <input type="password" class="form-input" id="apiKey" placeholder="sk-xxxx">
-              <button class="toggle-visibility" id="toggleApiKey" title="显示/隐藏密钥">
+              <input type="password" class="form-input" id="apiKey" placeholder="sk-...">
+              <button class="toggle-visibility" id="toggleApiKey">
                 <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                   <path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z" fill="currentColor"/>
                 </svg>
@@ -229,7 +128,7 @@
           </div>
 
           <div class="form-group">
-            <label class="form-label" data-i18n="modelName">模型名称</label>
+            <label class="form-label">模型名称</label>
             <input type="text" class="form-input" id="modelName" placeholder="gpt-4o-mini">
           </div>
 
@@ -237,37 +136,16 @@
             <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
               <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z" fill="currentColor"/>
             </svg>
-            <span data-i18n="testConnection">测试连接</span>
+            测试连接
           </button>
         </section>
 
         <!-- 翻译设置 -->
         <section class="settings-section">
-          <h3 class="section-title" data-i18n="translationSettings">🌍 翻译设置</h3>
+          <h3 class="section-title">翻译设置</h3>
           
           <div class="form-group">
-            <label class="form-label" data-i18n="sourceLang">源语言</label>
-            <select class="form-select" id="sourceLang">
-              <option value="auto" data-i18n="autoDetectLang">自动检测</option>
-              <option value="en">English</option>
-              <option value="zh-CN">简体中文</option>
-              <option value="zh-TW">繁體中文</option>
-              <option value="ja">日本語</option>
-              <option value="ko">한국어</option>
-              <option value="fr">Français</option>
-              <option value="de">Deutsch</option>
-              <option value="es">Español</option>
-              <option value="ru">Русский</option>
-              <option value="ar">العربية</option>
-              <option value="pt">Português</option>
-              <option value="it">Italiano</option>
-              <option value="vi">Tiếng Việt</option>
-              <option value="th">ไทย</option>
-            </select>
-          </div>
-
-          <div class="form-group">
-            <label class="form-label" data-i18n="targetLang">目标语言</label>
+            <label class="form-label">目标语言</label>
             <select class="form-select" id="targetLang">
               <option value="zh-CN">简体中文</option>
               <option value="zh-TW">繁體中文</option>
@@ -279,19 +157,15 @@
               <option value="es">Español</option>
               <option value="ru">Русский</option>
               <option value="ar">العربية</option>
-              <option value="pt">Português</option>
-              <option value="it">Italiano</option>
-              <option value="vi">Tiếng Việt</option>
-              <option value="th">ไทย</option>
             </select>
           </div>
 
           <div class="form-group">
-            <label class="form-label" data-i18n="translationStyle">翻译风格</label>
+            <label class="form-label">翻译风格</label>
             <select class="form-select" id="translationStyle">
-              <option value="accurate" data-i18n="styleAccurate">准确翻译 - 忠实原文</option>
-              <option value="fluent" data-i18n="styleFluent">流畅翻译 - 自然通顺</option>
-              <option value="creative" data-i18n="styleCreative">意译 - 生动地道</option>
+              <option value="accurate">准确翻译</option>
+              <option value="fluent">流畅翻译</option>
+              <option value="creative">意译</option>
             </select>
           </div>
 
@@ -299,7 +173,7 @@
             <label class="checkbox-label">
               <input type="checkbox" id="showOriginal" checked>
               <span class="checkmark"></span>
-              <span data-i18n="showOriginal">显示原文（双语对照）</span>
+              <span>显示原文（双语对照）</span>
             </label>
           </div>
 
@@ -307,34 +181,38 @@
             <label class="checkbox-label">
               <input type="checkbox" id="autoDetect" checked>
               <span class="checkmark"></span>
-              <span data-i18n="autoDetect">智能跳过目标语言内容</span>
+              <span>自动检测源语言</span>
             </label>
           </div>
         </section>
 
-
         <!-- 高级设置 -->
         <section class="settings-section">
-          <h3 class="section-title" data-i18n="advancedSettings">⚙️ 高级设置</h3>
+          <h3 class="section-title">高级设置</h3>
           
           <div class="form-group">
-            <label class="form-label" data-i18n="customPrompt">自定义翻译提示词（可选）</label>
-            <textarea class="form-textarea" id="customPrompt" rows="3" data-i18n-placeholder="customPromptPlaceholder"></textarea>
+            <label class="form-label">自定义翻译提示词</label>
+            <textarea class="form-textarea" id="customPrompt" rows="3" placeholder="留空使用默认提示词..."></textarea>
           </div>
 
           <div class="form-group">
-            <label class="form-label" data-i18n="maxTokens">最大 Token 数</label>
+            <label class="form-label">最大Token数</label>
             <input type="number" class="form-input" id="maxTokens" value="2048" min="256" max="8192">
           </div>
 
           <div class="form-group">
-            <label class="form-label" data-i18n="temperature">Temperature (创造性 0-1)</label>
+            <label class="form-label">Temperature (创造性)</label>
             <div class="range-container">
               <input type="range" class="form-range" id="temperature" min="0" max="1" step="0.1" value="0.3">
               <span class="range-value" id="temperatureValue">0.3</span>
             </div>
           </div>
         </section>
+
+        <!-- 保存按钮 -->
+        <div class="settings-actions">
+          <button class="btn-save" id="saveSettingsBtn">保存设置</button>
+        </div>
       </div>
     </main>
 
@@ -347,3 +225,4 @@
   <script src="popup.js" type="module"></script>
 </body>
 </html>
+
