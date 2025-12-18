@@ -388,7 +388,7 @@ function resetFabToIdle() {
 
 /**
  * 开始翻译 - 流式翻译策略
- * 🚀 核心优化：单条翻译 + 并发控制 + 即时显示 + epoch 会话管理
+ * 🚀 核心优化：单条翻译 + 并发控制 + 即时显示
  */
 function startTranslation(config) {
   if (state.isActive) {
@@ -459,7 +459,7 @@ function addToQueue(block) {
 
 /**
  * 处理翻译队列（流式）
- * 🔥 核心：并发控制 + 即时显示 + epoch 验证
+ * 🔥 核心：并发控制 + 即时显示
  */
 async function processQueue() {
   if (state.isProcessing) return;

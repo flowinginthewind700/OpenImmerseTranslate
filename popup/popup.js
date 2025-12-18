@@ -334,9 +334,9 @@ const ConfigManager = {
         typeof oldConfig.provider === 'string' &&
         PROVIDER_DEFAULTS[oldConfig.provider]
       ) ? oldConfig.provider : 'google';
-      
-      // 迁移全局配置
-      await this.saveGlobal({
+        
+        // 迁移全局配置
+        await this.saveGlobal({
         provider: validProvider,
         sourceLang: oldConfig.sourceLang || 'auto',
         targetLang: oldConfig.targetLang || 'zh-CN',
@@ -348,20 +348,20 @@ const ConfigManager = {
         maxTokens: oldConfig.maxTokens || 2048,
         temperature: oldConfig.temperature || 0.3,
         uiLanguage: oldConfig.uiLanguage || ''
-      });
-      
-      // 如果有 API Key，迁移到对应的 provider
+        });
+        
+        // 如果有 API Key，迁移到对应的 provider
       if (oldConfig.apiKey && typeof oldConfig.apiKey === 'string') {
         const providerDefaults = PROVIDER_DEFAULTS[validProvider] || {};
         await this.saveProvider(validProvider, {
           endpoint: oldConfig.apiEndpoint || providerDefaults.endpoint || '',
           model: oldConfig.modelName || providerDefaults.model || '',
           apiKey: oldConfig.apiKey
-        });
-      }
-      
-      // 删除旧配置
-      await chrome.storage.sync.remove('config');
+          });
+        }
+        
+        // 删除旧配置
+        await chrome.storage.sync.remove('config');
       console.log('[ConfigManager] Migrated old config successfully');
       
     } catch (error) {
@@ -1152,10 +1152,10 @@ async function injectContentScript(tabId) {
   try {
     // 先尝试注入 CSS（可能已存在，忽略错误）
     try {
-      await chrome.scripting.insertCSS({
+    await chrome.scripting.insertCSS({
         target: { tabId },
-        files: ['styles/content.css']
-      });
+      files: ['styles/content.css']
+    });
     } catch (cssError) {
       // CSS 可能已经存在，忽略
       console.log('[Popup] CSS may already be injected');
@@ -1174,15 +1174,15 @@ async function injectContentScript(tabId) {
     // 检查是否是"脚本已存在"类型的错误（这其实是好的）
     if (msg.includes('Cannot access') || msg.includes('not allowed')) {
       logToConsole('此页面不支持脚本注入', 'warning');
-      return false;
-    }
+    return false;
+  }
     
     // 检查是否是扩展上下文失效
     if (msg.includes('Extension context invalidated')) {
       logToConsole('扩展已更新，请刷新页面', 'warning');
       return false;
-    }
-    
+}
+
     // 其他错误，可能脚本已经存在
     console.warn('[Popup] Script injection result:', msg);
     
@@ -1375,7 +1375,7 @@ async function handleTranslatePage() {
       throw new Error('CONTENT_SCRIPT_FAILED');
     }
     
-    logToConsole(t('consoleCollecting'), 'info');
+      logToConsole(t('consoleCollecting'), 'info');
     
     // 发送翻译命令
     await sendMessageToTab(tab.id, {
@@ -1400,16 +1400,16 @@ function validateTranslationConfig() {
   // 确保 currentConfig 有效
   if (!currentConfig || typeof currentConfig !== 'object') {
     return t('errorConfigInvalid') || '配置无效，请刷新页面';
-  }
-  
+      }
+      
   // 检查 Provider 是否需要 API Key
   const provider = currentConfig.provider || 'google';
   const providerConfig = PROVIDER_DEFAULTS[provider];
   const needsApiKey = providerConfig?.needsApiKey !== false;
-  
+      
   if (needsApiKey && !currentConfig.apiKey) {
     return t('pleaseConfigureApi') || '请先配置 API Key';
-  }
+      }
   
   return null;
 }
@@ -1421,7 +1421,7 @@ function validateTranslationConfig() {
  */
 function handleTranslationError(error, t) {
   console.error('[Popup] Translation error:', error);
-  
+    
   const errorCode = error?.message || 'UNKNOWN';
   let userMessage = '';
   let logMessage = '';
@@ -1451,7 +1451,7 @@ function handleTranslationError(error, t) {
       
     default:
       // 使用通用错误解析
-      const friendlyError = parseErrorMessage(error);
+    const friendlyError = parseErrorMessage(error);
       userMessage = friendlyError;
       logMessage = friendlyError;
   }
@@ -1459,7 +1459,7 @@ function handleTranslationError(error, t) {
   showToast(userMessage, 'error');
   logToConsole(logMessage, 'error');
   updateStatus('error', t('translateError') || '翻译出错', userMessage);
-  setTranslatingState(false);
+    setTranslatingState(false);
 }
 
 // 设置翻译状态
@@ -1767,8 +1767,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     // 更新内存配置
     if (currentConfig) {
       currentConfig.showFab = message.showFab;
-    }
   }
+}
 });
 
 // 应用翻译状态到 UI（供 StateManager 使用）
