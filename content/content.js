@@ -155,24 +155,24 @@ const CONFIG = {
   // 视口检测
   ROOT_MARGIN: '50% 0px 150% 0px', // 上方50% + 下方150%
   THRESHOLD: 0.01,
-  
+
   // 🚀 流式翻译配置（核心优化）
   MAX_CONCURRENT: 6, // 最大并发翻译数（单条）
   SINGLE_TRANSLATE: true, // 启用单条翻译模式（流式显示）
   SCAN_INTERVAL: 150, // 滚动扫描间隔(ms)
   SCROLL_DEBOUNCE: 100, // 滚动防抖(ms)
-  
+
   // 动态内容
   MUTATION_DEBOUNCE: 200,
-  
+
   // 扫描限制
   MAX_VIEWPORT_SCAN: 300,
   MAX_QUEUE_SIZE: 100, // 队列最大长度
-  
+
   // 文本过滤
   MIN_TEXT_LENGTH: 2,
   MAX_TEXT_LENGTH: 5000,
-  
+
   // 跳过的标签
   SKIP_TAGS: new Set([
     'SCRIPT', 'STYLE', 'NOSCRIPT', 'IFRAME', 'OBJECT', 'EMBED',
@@ -180,10 +180,10 @@ const CONFIG = {
     'CODE', 'PRE', 'KBD', 'VAR', 'SAMP', 'INPUT', 'TEXTAREA',
     'SELECT', 'IMG', 'BR', 'HR', 'META', 'LINK', 'HEAD', 'TITLE'
   ]),
-  
+
   // 跳过的类名
   SKIP_CLASSES: ['oit-wrapper', 'oit-translation', 'oit-original', 'notranslate', 'no-translate'],
-  
+
   // 容器标签
   CONTAINER_TAGS: new Set([
     'DIV', 'SPAN', 'P', 'A', 'LI', 'TD', 'TH', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6',
@@ -193,6 +193,22 @@ const CONFIG = {
     'DT', 'DD', 'ADDRESS', 'TIME', 'ABBR', 'DFN', 'SUMMARY', 'DETAILS',
     'BUTTON'
   ])
+};
+
+// 🔥 性能优化: 预编译正则表达式,避免运行时重复编译
+const REGEX_PATTERNS = {
+  // 只包含数字、空白、标点、符号
+  ONLY_PUNCTUATION: /^[\d\s\p{P}\p{S}]+$/u,
+  // URL或邮箱
+  URL_EMAIL: /^(https?:\/\/|www\.|[\w.-]+@[\w.-]+\.\w+)/,
+  // 中文字符
+  CHINESE: /[\u4e00-\u9fff]/g,
+  // 日文字符
+  JAPANESE: /[\u3040-\u309f\u30a0-\u30ff]/g,
+  // 韩文字符
+  KOREAN: /[\uac00-\ud7af]/g,
+  // 空白字符
+  WHITESPACE: /\s+/g
 };
 
 // ==================== 状态管理 ====================
@@ -210,13 +226,18 @@ class TranslationState {
     this.completedElements = new WeakSet();
     this.processedTexts = new Set();
     this.blockMap = new Map();
-    
+
     // 🚀 流式翻译队列
     this.translationQueue = []; // 待翻译队列
     this.activeTranslations = 0; // 当前并发数
     this.isProcessing = false; // 是否正在处理队列
+
+    // 🔥 性能优化: 维护待翻译元素的引用,避免全局querySelectorAll
+    this.pendingElements = new Set(); // 待翻译元素集合
+    this.translatingElements = new Set(); // 翻译中元素集合
+    this.periodicScanTimer = null; // 定期扫描定时器
   }
-  
+
   reset() {
     this.isActive = false;
     this.shouldStop = false;
@@ -229,7 +250,11 @@ class TranslationState {
     this.translationQueue = []; // 🔥 确保队列被清空
     this.activeTranslations = 0;
     this.isProcessing = false;
-    
+
+    // 🔥 性能优化: 清理待翻译元素集合
+    this.pendingElements.clear();
+    this.translatingElements.clear();
+
     if (this.scrollTimer) {
       clearTimeout(this.scrollTimer);
       this.scrollTimer = null;
@@ -237,6 +262,10 @@ class TranslationState {
     if (this.mutationTimer) {
       clearTimeout(this.mutationTimer);
       this.mutationTimer = null;
+    }
+    if (this.periodicScanTimer) {
+      clearTimeout(this.periodicScanTimer);
+      this.periodicScanTimer = null;
     }
     if (this.mutationObserver) {
       this.mutationObserver.disconnect();
@@ -624,15 +653,43 @@ function scanViewportAndQueue() {
 
 /**
  * 定期全面扫描（补漏）
+ * 🔥 性能优化: 自适应间隔,根据队列状态动态调整扫描频率
  */
 function startPeriodicScan() {
-  // 每 2 秒进行一次补充扫描
-  setInterval(() => {
-    if (!state.isActive || state.shouldStop) return;
-    if (state.translationQueue.length > 20) return; // 队列满时跳过
-    
-    scanViewportAndQueue();
-  }, 2000);
+  let scanInterval = 2000; // 初始间隔2秒
+  let scanTimer = null;
+
+  const adaptiveScan = () => {
+    if (!state.isActive || state.shouldStop) {
+      if (scanTimer) clearTimeout(scanTimer);
+      return;
+    }
+
+    // 🔥 动态调整间隔: 队列越满,扫描越慢
+    if (state.translationQueue.length > 50) {
+      scanInterval = 8000; // 队列很满,降低到8秒
+    } else if (state.translationQueue.length > 20) {
+      scanInterval = 5000; // 队列较满,5秒
+    } else if (state.translationQueue.length > 10) {
+      scanInterval = 3000; // 队列中等,3秒
+    } else {
+      scanInterval = 2000; // 队列空闲,2秒
+    }
+
+    // 只在队列不是很满时才扫描
+    if (state.translationQueue.length < 50) {
+      scanViewportAndQueue();
+    }
+
+    // 递归调用,使用动态间隔
+    scanTimer = setTimeout(adaptiveScan, scanInterval);
+  };
+
+  // 启动自适应扫描
+  scanTimer = setTimeout(adaptiveScan, scanInterval);
+
+  // 保存定时器引用以便停止时清理
+  state.periodicScanTimer = scanTimer;
 }
 
 /**
@@ -712,63 +769,133 @@ function startMutationObserver() {
 /**
  * 收集视口内可见的文本块（增强版 - 支持各类 SPA）
  * 🔥 关键：只用 completedElements 去重，不用 processedTexts 提前标记
+ * 🔥 性能优化: Read-Write分离,批量获取getBoundingClientRect避免layout thrashing
  */
 function collectViewportBlocks() {
   const blocks = [];
   const viewportHeight = window.innerHeight;
   const seenInThisScan = new Set(); // 本次扫描内去重
-  
-  // 第一步：优先处理 Twitter/X 的推文内容
+
+  // 🔥 性能优化: 阶段1 - 批量收集元素 (Read Phase)
   const tweetTexts = document.querySelectorAll('[data-testid="tweetText"]');
+  const primaryElements = document.querySelectorAll('h1, h2, h3, h4, h5, h6, p, blockquote, figcaption');
+  const secondaryElements = document.querySelectorAll('li, td, th, dt, dd, label, button, a');
+
+  // 🔥 阶段2 - 批量读取所有rect (一次性触发layout计算)
+  const rectsCache = new Map();
+  const allElements = [...tweetTexts, ...primaryElements, ...secondaryElements];
+
+  for (const el of allElements) {
+    if (!state.completedElements.has(el) && !el.closest('.oit-wrapper')) {
+      rectsCache.set(el, el.getBoundingClientRect());
+    }
+  }
+
+  // 🔥 阶段3 - 使用缓存的rect进行处理 (No layout thrashing)
+  // 第一步：优先处理 Twitter/X 的推文内容
   for (const el of tweetTexts) {
     if (blocks.length >= CONFIG.MAX_VIEWPORT_SCAN) break;
-    if (state.completedElements.has(el)) continue; // 只用 completedElements 去重
+    if (state.completedElements.has(el)) continue;
     if (el.closest('.oit-wrapper') || el.classList.contains('oit-pending')) continue;
-    
-    const rect = el.getBoundingClientRect();
+
+    const rect = rectsCache.get(el);
+    if (!rect) continue;
+
     // 视口检测：当前视口上下各扩展 50%
     if (rect.bottom < -viewportHeight * 0.5 || rect.top > viewportHeight * 1.5) continue;
-    
+
     const text = el.textContent?.trim();
     if (!text || text.length < CONFIG.MIN_TEXT_LENGTH) continue;
     if (text.length > CONFIG.MAX_TEXT_LENGTH) continue;
     if (seenInThisScan.has(text)) continue;
-    if (/^[\d\s\p{P}\p{S}]+$/u.test(text)) continue;
+    if (REGEX_PATTERNS.ONLY_PUNCTUATION.test(text)) continue; // 🔥 使用预编译正则
     if (state.config?.autoDetect && isTargetLanguage(text)) continue;
-    
+
     seenInThisScan.add(text);
-    blocks.push({ 
-      element: el, 
+    blocks.push({
+      element: el,
       textNode: null,
       text,
-      isTwitter: true 
+      isTwitter: true
     });
   }
-  
+
   // 第二步：处理标题和段落（优先级高）
-  const primarySelectors = 'h1, h2, h3, h4, h5, h6, p, blockquote, figcaption';
-  collectElementsWithText(primarySelectors, blocks, viewportHeight, seenInThisScan);
-  
+  collectElementsWithTextOptimized(primaryElements, blocks, viewportHeight, seenInThisScan, rectsCache);
+
   // 第三步：处理列表项和其他容器
-  const secondarySelectors = 'li, td, th, dt, dd, label, button, a';
-  collectElementsWithText(secondarySelectors, blocks, viewportHeight, seenInThisScan);
-  
+  collectElementsWithTextOptimized(secondaryElements, blocks, viewportHeight, seenInThisScan, rectsCache);
+
   // 第四步：处理 span 和 div（只取叶子节点）
   collectLeafTextElements(blocks, viewportHeight, seenInThisScan);
-  
-  // 按Y坐标排序
+
+  // 🔥 按Y坐标排序 - 使用缓存的rect
   blocks.sort((a, b) => {
-    const aRect = a.element.getBoundingClientRect();
-    const bRect = b.element.getBoundingClientRect();
+    const aRect = rectsCache.get(a.element) || a.element.getBoundingClientRect();
+    const bRect = rectsCache.get(b.element) || b.element.getBoundingClientRect();
     return aRect.top - bRect.top;
   });
-  
+
   console.log(`[OIT] Viewport scan: found ${blocks.length} blocks`);
   return blocks;
 }
 
 /**
- * 收集指定选择器的文本元素
+ * 🔥 性能优化版: 收集指定元素的文本 (使用预缓存的rect)
+ */
+function collectElementsWithTextOptimized(elements, blocks, viewportHeight, seenInThisScan, rectsCache) {
+  const collectedElements = new WeakSet();
+
+  for (const el of elements) {
+    if (blocks.length >= CONFIG.MAX_VIEWPORT_SCAN) break;
+
+    const rect = rectsCache.get(el);
+    if (!rect) continue;
+
+    // 🔥 只检测当前视口附近（上下各50%）
+    if (rect.bottom < -viewportHeight * 0.5 || rect.top > viewportHeight * 1.5) continue;
+    if (rect.width === 0 || rect.height === 0) continue;
+
+    if (el.closest('.oit-wrapper') || el.classList.contains('oit-pending')) continue;
+    if (el.closest('.oit-translation')) continue;
+    if (state.completedElements.has(el)) continue;
+
+    // 🔥 检查是否是已收集元素的子元素
+    if (isChildOfCollected(el, collectedElements)) continue;
+
+    // 获取元素的完整文本内容（包括嵌套）
+    const text = el.textContent?.trim();
+    if (!text || text.length < CONFIG.MIN_TEXT_LENGTH) continue;
+    if (text.length > CONFIG.MAX_TEXT_LENGTH) continue;
+    if (seenInThisScan && seenInThisScan.has(text)) continue;
+    if (REGEX_PATTERNS.ONLY_PUNCTUATION.test(text)) continue; // 🔥 使用预编译正则
+    if (state.config?.autoDetect && isTargetLanguage(text)) continue;
+
+    // 检查是否有直接文本内容（不是纯容器）
+    const directText = getDirectTextContent(el);
+    const hasDirectText = directText && directText.length >= CONFIG.MIN_TEXT_LENGTH;
+
+    // 如果没有直接文本但有嵌套文本，使用整体追加模式
+    const useAppendMode = !hasDirectText && text.length >= CONFIG.MIN_TEXT_LENGTH;
+
+    if (hasDirectText) {
+      const textNode = findTextNode(el, directText);
+      if (textNode) {
+        if (seenInThisScan) seenInThisScan.add(text);
+        if (seenInThisScan) seenInThisScan.add(directText);
+        collectedElements.add(el);
+        blocks.push({ element: el, textNode, text: directText });
+      }
+    } else if (useAppendMode) {
+      if (seenInThisScan) seenInThisScan.add(text);
+      collectedElements.add(el);
+      blocks.push({ element: el, textNode: null, text, isAppend: true });
+    }
+  }
+}
+
+/**
+ * 收集指定选择器的文本元素 (旧版本,保留用于后备)
  * 🔥 增强去重：记录已收集元素，防止父子元素重复
  */
 function collectElementsWithText(selectors, blocks, viewportHeight, seenInThisScan) {
@@ -797,7 +924,7 @@ function collectElementsWithText(selectors, blocks, viewportHeight, seenInThisSc
     if (text.length > CONFIG.MAX_TEXT_LENGTH) continue;
     // 🔥 只用本次扫描的 Set 去重，不用 processedTexts（那个只在翻译完成后才标记）
     if (seenInThisScan && seenInThisScan.has(text)) continue;
-    if (/^[\d\s\p{P}\p{S}]+$/u.test(text)) continue;
+    if (REGEX_PATTERNS.ONLY_PUNCTUATION.test(text)) continue; // 🔥 使用预编译正则
     if (state.config?.autoDetect && isTargetLanguage(text)) continue;
     
     // 检查是否有直接文本内容（不是纯容器）
@@ -886,7 +1013,7 @@ function collectLeafTextElements(blocks, viewportHeight, seenInThisScan) {
         if (rect.width === 0 || rect.height === 0) return NodeFilter.FILTER_REJECT;
         
         // 跳过纯符号
-        if (/^[\d\s\p{P}\p{S}]+$/u.test(text)) return NodeFilter.FILTER_REJECT;
+        if (REGEX_PATTERNS.ONLY_PUNCTUATION.test(text)) return NodeFilter.FILTER_REJECT; // 🔥 使用预编译正则
         
         return NodeFilter.FILTER_ACCEPT;
       }
@@ -917,31 +1044,57 @@ function collectLeafTextElements(blocks, viewportHeight, seenInThisScan) {
   }
 }
 
+// 🔥 性能优化: 使用WeakMap缓存翻译检查结果
+const translatedCheckCache = new WeakMap();
+let cacheHits = 0;
+let cacheMisses = 0;
+
 /**
  * 🔥 检查元素是否已被翻译（防止重复翻译）
+ * 🔥 性能优化: 使用WeakMap缓存结果,避免重复检查
  * 检查：1. 元素本身 2. 父元素 3. 子元素
  */
 function isAlreadyTranslated(element) {
   if (!element) return true;
-  
-  // 1. 检查元素本身是否有翻译标记
-  if (element.classList?.contains('oit-wrapper')) return true;
-  if (element.querySelector?.('.oit-translation')) return true;
-  
-  // 2. 检查父元素链是否已被翻译
-  if (element.closest?.('.oit-wrapper')) return true;
-  
-  // 3. 检查 completedElements
-  if (state.completedElements.has(element)) return true;
-  
-  // 4. 检查父元素是否在 completedElements 中
+
+  // 🔥 快速缓存检查 - 大幅减少DOM操作
+  if (translatedCheckCache.has(element)) {
+    cacheHits++;
+    return translatedCheckCache.get(element);
+  }
+
+  cacheMisses++;
+
+  // 🔥 最快的检查放前面 - 短路优化
+  // 1. 检查 completedElements (O(1) 操作)
+  if (state.completedElements.has(element)) {
+    translatedCheckCache.set(element, true);
+    return true;
+  }
+
+  // 2. 组合DOM检查 - 减少函数调用
+  const hasWrapper = element.classList?.contains('oit-wrapper') ||
+                     element.closest?.('.oit-wrapper') !== null ||
+                     element.querySelector?.('.oit-translation') !== null;
+
+  if (hasWrapper) {
+    translatedCheckCache.set(element, true);
+    return true;
+  }
+
+  // 3. 检查父元素链 (最慢的操作,放最后)
   let parent = element.parentElement;
   while (parent && parent !== document.body) {
-    if (state.completedElements.has(parent)) return true;
-    if (parent.classList?.contains('oit-wrapper')) return true;
+    if (state.completedElements.has(parent) ||
+        parent.classList?.contains('oit-wrapper')) {
+      translatedCheckCache.set(element, true);
+      return true;
+    }
     parent = parent.parentElement;
   }
-  
+
+  // 缓存负面结果
+  translatedCheckCache.set(element, false);
   return false;
 }
 
@@ -950,9 +1103,12 @@ function isAlreadyTranslated(element) {
  */
 function markAsPending(element) {
   if (!element || element.classList.contains('oit-pending')) return;
-  
+
   element.classList.add('oit-pending');
-  
+
+  // 🔥 性能优化: 记录待翻译元素,避免后续全局查询
+  state.pendingElements.add(element);
+
   // 检测深色背景
   if (isDarkBackground(element) || isDarkMode()) {
     element.classList.add('oit-pending-dark');
@@ -965,6 +1121,10 @@ function markAsPending(element) {
 function removePendingMark(element) {
   if (!element) return;
   element.classList.remove('oit-pending', 'oit-pending-dark', 'oit-translating-text');
+
+  // 🔥 性能优化: 从待翻译集合中移除
+  state.pendingElements.delete(element);
+  state.translatingElements.delete(element);
 }
 
 /**
@@ -974,6 +1134,10 @@ function markAsTranslating(element) {
   if (!element) return;
   element.classList.remove('oit-pending', 'oit-pending-dark');
   element.classList.add('oit-translating-text');
+
+  // 🔥 性能优化: 从待翻译移到翻译中集合
+  state.pendingElements.delete(element);
+  state.translatingElements.add(element);
 }
 
 /**
@@ -1013,31 +1177,39 @@ function findFirstTextNode(element) {
 function stopTranslation() {
   state.shouldStop = true;
   state.isActive = false;
-  
+
   // 🔥 立即清空翻译队列，防止继续处理旧任务
   state.translationQueue = [];
   state.isProcessing = false;
-  
+
   if (state.observer) {
     state.observer.disconnect();
     state.observer = null;
   }
-  
+
   if (state.mutationObserver) {
     state.mutationObserver.disconnect();
     state.mutationObserver = null;
   }
-  
+
   if (state.scrollHandler) {
     window.removeEventListener('scroll', state.scrollHandler);
     state.scrollHandler = null;
   }
-  
-  // 移除所有待翻译标记
-  document.querySelectorAll('.oit-pending, .oit-pending-dark, .oit-translating-text').forEach(el => {
-    el.classList.remove('oit-pending', 'oit-pending-dark', 'oit-translating-text');
+
+  // 🔥 性能优化: 使用维护的Set集合而非全局querySelectorAll
+  // 移除所有待翻译和翻译中的标记
+  state.pendingElements.forEach(el => {
+    if (el && el.classList) {
+      el.classList.remove('oit-pending', 'oit-pending-dark');
+    }
   });
-  
+  state.translatingElements.forEach(el => {
+    if (el && el.classList) {
+      el.classList.remove('oit-translating-text');
+    }
+  });
+
   // 调用reset清理状态
   state.reset();
   console.log('[OpenImmerseTranslate] Translation stopped, queue cleared');
@@ -1101,10 +1273,10 @@ function collectTextNodes(root, blocks, processedNodes, processedTexts) {
         }
         
         // 跳过纯数字/标点/空白
-        if (/^[\d\s\p{P}\p{S}]+$/u.test(text)) return NodeFilter.FILTER_REJECT;
-        
+        if (REGEX_PATTERNS.ONLY_PUNCTUATION.test(text)) return NodeFilter.FILTER_REJECT; // 🔥 使用预编译正则
+
         // 跳过纯URL或邮箱
-        if (/^(https?:\/\/|www\.|[\w.-]+@[\w.-]+\.\w+)/.test(text)) return NodeFilter.FILTER_REJECT;
+        if (REGEX_PATTERNS.URL_EMAIL.test(text)) return NodeFilter.FILTER_REJECT; // 🔥 使用预编译正则
         
         return NodeFilter.FILTER_ACCEPT;
       }
@@ -1167,7 +1339,7 @@ function collectElementTexts(root, blocks, processedNodes, processedTexts) {
     if (processedTexts.has(directText)) return;
     
     // 跳过纯数字/标点
-    if (/^[\d\s\p{P}\p{S}]+$/u.test(directText)) return;
+    if (REGEX_PATTERNS.ONLY_PUNCTUATION.test(directText)) return; // 🔥 使用预编译正则
     
     // 检查是否已是目标语言
     if (state.config?.autoDetect && isTargetLanguage(directText)) return;
@@ -1435,32 +1607,38 @@ function isElementVisible(element) {
 
 /**
  * 检查是否已是目标语言
+ * 🔥 性能优化: 使用预编译正则表达式
  */
 function isTargetLanguage(text) {
   const targetLang = state.config?.targetLang || 'zh-CN';
-  
+  const textWithoutSpace = text.replace(REGEX_PATTERNS.WHITESPACE, ''); // 🔥 使用预编译正则
+
   if (targetLang === 'zh-CN' || targetLang === 'zh-TW') {
-    const ratio = (text.match(/[\u4e00-\u9fff]/g) || []).length / text.replace(/\s/g, '').length;
+    const matches = text.match(REGEX_PATTERNS.CHINESE); // 🔥 使用预编译正则
+    const ratio = (matches || []).length / textWithoutSpace.length;
     return ratio > 0.5;
   }
   if (targetLang === 'ja') {
-    const ratio = (text.match(/[\u3040-\u309f\u30a0-\u30ff]/g) || []).length / text.replace(/\s/g, '').length;
+    const matches = text.match(REGEX_PATTERNS.JAPANESE); // 🔥 使用预编译正则
+    const ratio = (matches || []).length / textWithoutSpace.length;
     return ratio > 0.3;
   }
   if (targetLang === 'ko') {
-    const ratio = (text.match(/[\uac00-\ud7af]/g) || []).length / text.replace(/\s/g, '').length;
+    const matches = text.match(REGEX_PATTERNS.KOREAN); // 🔥 使用预编译正则
+    const ratio = (matches || []).length / textWithoutSpace.length;
     return ratio > 0.3;
   }
-  
+
   return false;
 }
 
 /**
  * 检查内容是否相同
+ * 🔥 性能优化: 使用预编译正则表达式
  */
 function isSameContent(original, translation) {
-  return original.replace(/\s+/g, ' ').trim().toLowerCase() === 
-         translation.replace(/\s+/g, ' ').trim().toLowerCase();
+  return original.replace(REGEX_PATTERNS.WHITESPACE, ' ').trim().toLowerCase() ===
+         translation.replace(REGEX_PATTERNS.WHITESPACE, ' ').trim().toLowerCase();
 }
 
 /**
@@ -1493,10 +1671,18 @@ function escapeHtml(text) {
  */
 function removeAllTranslations() {
   stopTranslation();
-  
+
+  // 🔥 性能优化: 使用维护的Set集合而非全局querySelectorAll
   // 移除所有待翻译和翻译中的标记
-  document.querySelectorAll('.oit-pending, .oit-pending-dark, .oit-translating-text').forEach(el => {
-    el.classList.remove('oit-pending', 'oit-pending-dark', 'oit-translating-text');
+  state.pendingElements.forEach(el => {
+    if (el && el.classList) {
+      el.classList.remove('oit-pending', 'oit-pending-dark');
+    }
+  });
+  state.translatingElements.forEach(el => {
+    if (el && el.classList) {
+      el.classList.remove('oit-translating-text');
+    }
   });
   
   // 处理 Twitter 等追加翻译的情况
@@ -1574,18 +1760,22 @@ function notifyProgress(current, total) {
 
 let floatingBtn = null;
 let floatingPanel = null;
+let mouseupHandler = null; // 🔥 性能优化: 保存事件处理器引用用于清理
 
-document.addEventListener('mouseup', (e) => {
+// 🔥 性能优化: 使用命名函数便于清理
+mouseupHandler = (e) => {
   const selection = window.getSelection();
   const selectedText = selection.toString().trim();
-  
+
   if (selectedText.length < CONFIG.MIN_TEXT_LENGTH) {
     hideFloating();
     return;
   }
-  
+
   showFloatingButton(e.clientX, e.clientY, selectedText);
-});
+};
+
+document.addEventListener('mouseup', mouseupHandler);
 
 function showFloatingButton(x, y, text) {
   hideFloating();
@@ -2288,3 +2478,35 @@ if (document.readyState === 'loading') {
   // DOM 已加载，直接初始化
   initFabOnLoad();
 }
+
+// 🔥 性能优化: 页面卸载时清理所有事件监听器和资源
+window.addEventListener('beforeunload', () => {
+  console.log('[OIT] Page unloading, cleaning up...');
+
+  // 清理选中文本翻译的事件监听器
+  if (mouseupHandler) {
+    document.removeEventListener('mouseup', mouseupHandler);
+    mouseupHandler = null;
+  }
+
+  // 停止翻译并清理所有状态
+  if (state.isActive) {
+    stopTranslation();
+  }
+
+  // 完全重置状态
+  state.fullReset();
+
+  // 清理浮动元素
+  hideFloating();
+  hideFAB();
+
+  // 🔥 性能调试: 打印缓存命中率
+  const totalChecks = cacheHits + cacheMisses;
+  if (totalChecks > 0) {
+    const hitRate = ((cacheHits / totalChecks) * 100).toFixed(1);
+    console.log(`[OIT] Translation check cache: ${cacheHits} hits / ${cacheMisses} misses (${hitRate}% hit rate)`);
+  }
+
+  console.log('[OIT] Cleanup completed');
+});

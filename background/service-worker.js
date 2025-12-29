@@ -374,8 +374,26 @@ function buildSystemPrompt(config) {
 格式：多段用 [SEP] 分隔，输出对应分隔`;
 }
 
-function buildUserPrompt(texts, config) {
-  return texts.join(' [SEP] ');
+/**
+ * 构建用户提示词
+ * 🔥 性能优化: 使用快速路径处理单文本,预分配数组容量
+ */
+function buildUserPrompt(texts) {
+  // 🔥 快速路径: 单个文本直接返回
+  if (texts.length === 1) return texts[0];
+
+  // 🔥 空检查
+  if (texts.length === 0) return '';
+
+  // 🔥 预分配数组容量,避免多次扩容
+  const parts = new Array(texts.length * 2 - 1);
+  for (let i = 0; i < texts.length; i++) {
+    parts[i * 2] = texts[i];
+    if (i < texts.length - 1) {
+      parts[i * 2 + 1] = ' [SEP] ';
+    }
+  }
+  return parts.join('');
 }
 
 // ==================== API 调用 ====================
