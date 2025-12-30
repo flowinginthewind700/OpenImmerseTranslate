@@ -1764,6 +1764,23 @@ let mouseupHandler = null; // 🔥 性能优化: 保存事件处理器引用用�
 
 // 🔥 性能优化: 使用命名函数便于清理
 mouseupHandler = (e) => {
+  // 🔥 关键修复：如果点击的是悬浮按钮或面板，不处理
+  const target = e.target;
+  
+  // 检查是否点击了按钮（包括按钮内的 SVG 元素）
+  if (floatingBtn) {
+    if (floatingBtn === target || floatingBtn.contains(target)) {
+      return; // 点击按钮本身，不处理
+    }
+  }
+  
+  // 检查是否点击了面板
+  if (floatingPanel) {
+    if (floatingPanel === target || floatingPanel.contains(target)) {
+      return; // 点击面板，不处理
+    }
+  }
+
   const selection = window.getSelection();
   const selectedText = selection.toString().trim();
 
@@ -1779,89 +1796,226 @@ document.addEventListener('mouseup', mouseupHandler);
 
 function showFloatingButton(x, y, text) {
   hideFloating();
-  
+
+  // 计算按钮位置，确保完全在视口内
+  const btnWidth = 36;
+  const btnHeight = 36;
+  const padding = 10;
+
+  let btnX = x + 10;
+  let btnY = y - 40;
+
+  // 边界检查 - 确保按钮不会超出屏幕
+  if (btnX + btnWidth > window.innerWidth) {
+    btnX = x - btnWidth - 10;
+  }
+  if (btnY < padding) {
+    btnY = y + 10;
+  }
+  if (btnY + btnHeight > window.innerHeight) {
+    btnY = window.innerHeight - btnHeight - padding;
+  }
+
   floatingBtn = document.createElement('button');
   floatingBtn.className = 'oit-floating-btn';
   floatingBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none"><path d="M12.87 15.07l-2.54-2.51.03-.03A17.52 17.52 0 0014.07 6H17V4h-7V2H8v2H1v2h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11.76-2.04zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2l-4.5-12zm-2.62 7l1.62-4.33L19.12 17h-3.24z" fill="currentColor"/></svg>`;
-  floatingBtn.style.cssText = `position:fixed;left:${Math.min(x+10,window.innerWidth-50)}px;top:${Math.max(y-40,10)}px;z-index:2147483647;`;
-  
+  floatingBtn.style.cssText = `position:fixed;left:${btnX}px;top:${btnY}px;z-index:2147483647;pointer-events:auto;`;
+
+  // 保存位置和文本信息，用于后续面板定位
+  floatingBtn.dataset.posX = btnX;
+  floatingBtn.dataset.posY = btnY;
+  floatingBtn.dataset.text = text;
+
   document.body.appendChild(floatingBtn);
-  
-  floatingBtn.addEventListener('click', (e) => {
+
+  // 🔥 关键修复：在按钮上处理所有鼠标事件，彻底阻止事件传播
+  // 1. mouseup 事件 - 必须阻止，否则会触发 mouseupHandler 重新创建按钮
+  floatingBtn.addEventListener('mouseup', (e) => {
     e.stopPropagation();
-    translateSelection(text, x, y);
-  });
-  
-  setTimeout(() => document.addEventListener('mousedown', hideOnClickOutside), 100);
+    e.stopImmediatePropagation();
+  }, true); // 捕获阶段，优先处理
+
+  // 2. mousedown 事件 - 阻止 hideOnClickOutside
+  floatingBtn.addEventListener('mousedown', (e) => {
+    e.stopPropagation();
+    e.stopImmediatePropagation();
+  }, true); // 捕获阶段，优先处理
+
+  // 3. click 事件 - 处理实际点击
+  floatingBtn.addEventListener('click', async (e) => {
+    // 阻止所有事件传播
+    e.stopPropagation();
+    e.stopImmediatePropagation();
+    e.preventDefault();
+
+    // 保存信息（在移除按钮之前）
+    const btn = floatingBtn;
+    const posX = parseInt(btn.dataset.posX);
+    const posY = parseInt(btn.dataset.posY);
+    const selectedText = btn.dataset.text || text;
+
+    // 立即移除按钮（在显示面板之前）
+    if (btn && btn.parentNode) {
+      btn.remove();
+    }
+    floatingBtn = null;
+
+    // 移除外部点击监听器
+    document.removeEventListener('mousedown', hideOnClickOutside, true);
+
+    // 显示翻译面板
+    await showTranslationPanel(selectedText, posX, posY);
+  }, true); // 捕获阶段，优先处理
+
+  // 延迟添加外部点击监听，避免立即触发
+  setTimeout(() => {
+    if (floatingBtn) {
+      document.addEventListener('mousedown', hideOnClickOutside, true);
+    }
+  }, 100);
 }
 
 function hideOnClickOutside(e) {
-  if (floatingBtn && !floatingBtn.contains(e.target) && 
-      (!floatingPanel || !floatingPanel.contains(e.target))) {
-    hideFloating();
+  // 🔥 专业方案：严格检查点击目标
+  if (!floatingBtn) return;
+  
+  const target = e.target;
+  
+  // 检查点击是否在按钮内部（包括 SVG 元素）
+  if (floatingBtn === target || floatingBtn.contains(target)) {
+    return; // 点击在按钮上，不隐藏
   }
+  
+  // 检查点击是否在面板内部
+  if (floatingPanel && (floatingPanel === target || floatingPanel.contains(target))) {
+    return; // 点击在面板上，不隐藏
+  }
+  
+  // 点击在外部，隐藏按钮和面板
+  hideFloating();
 }
 
 function hideFloating() {
   if (floatingBtn) { floatingBtn.remove(); floatingBtn = null; }
   if (floatingPanel) { floatingPanel.remove(); floatingPanel = null; }
-  document.removeEventListener('mousedown', hideOnClickOutside);
+  // 🔥 移除事件监听器时也要指定 capture 参数，与添加时保持一致
+  document.removeEventListener('mousedown', hideOnClickOutside, true);
 }
 
-async function translateSelection(text, x, y) {
+/**
+ * 显示翻译面板（不清理按钮，因为按钮已经被移除）
+ */
+async function showTranslationPanel(text, x, y) {
   // 🔥 检查扩展上下文
   if (!isExtensionContextValid()) {
     showContextInvalidatedWarning();
     return;
   }
-  
-  hideFloating();
-  
+
+  // 清理可能存在的旧面板
+  if (floatingPanel) {
+    floatingPanel.remove();
+    floatingPanel = null;
+  }
+
+  // 计算面板位置，确保完全在视口内
+  const panelWidth = 400;
+  const panelMinHeight = 180;
+  const padding = 20;
+
+  let panelX = x + 46; // 按钮右侧
+  let panelY = y;
+
+  // 边界检查 - 水平方向
+  if (panelX + panelWidth > window.innerWidth - padding) {
+    panelX = x - panelWidth - 10; // 按钮左侧
+    if (panelX < padding) {
+      panelX = padding; // 贴左边
+    }
+  }
+
+  // 边界检查 - 垂直方向
+  if (panelY + panelMinHeight > window.innerHeight - padding) {
+    panelY = window.innerHeight - panelMinHeight - padding;
+  }
+  if (panelY < padding) {
+    panelY = padding;
+  }
+
   floatingPanel = document.createElement('div');
   floatingPanel.className = 'oit-floating-panel';
   floatingPanel.innerHTML = `<div class="oit-panel-loading"><div class="oit-spinner"></div><span>翻译中...</span></div>`;
-  floatingPanel.style.cssText = `position:fixed;left:${Math.min(x,window.innerWidth-320)}px;top:${Math.min(y+10,window.innerHeight-200)}px;z-index:2147483647;`;
-  
+  floatingPanel.style.cssText = `position:fixed;left:${panelX}px;top:${panelY}px;z-index:2147483647;`;
+
   document.body.appendChild(floatingPanel);
-  
+
   try {
     // 🔥 使用新配置系统
     const config = await loadFullConfig();
-    
+
     // 检查是否需要 API Key
     const needsApiKey = checkNeedsApiKey(config.provider);
     if (needsApiKey && !config.apiKey) {
       floatingPanel.innerHTML = `<div class="oit-panel-error">请先在插件设置中配置 API 密钥</div>`;
       return;
     }
-    
+
     const response = await chrome.runtime.sendMessage({
       action: 'translate',
       texts: [text],
       config: config
     });
-    
+
     if (response.error) throw new Error(response.error);
-    
+
     const translation = response.translations[0];
-    
+
     floatingPanel.innerHTML = `
       <div class="oit-panel-content">
-        <div class="oit-panel-original">${escapeHtml(text)}</div>
-        <div class="oit-panel-divider"></div>
-        <div class="oit-panel-translation">${escapeHtml(translation)}</div>
-        <div class="oit-panel-actions">
-          <button class="oit-copy-btn" title="复制"><svg viewBox="0 0 24 24" fill="none"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z" fill="currentColor"/></svg></button>
-          <button class="oit-close-btn" title="关闭"><svg viewBox="0 0 24 24" fill="none"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" fill="currentColor"/></svg></button>
+        <div class="oit-panel-header">
+          <span class="oit-panel-title">翻译结果</span>
+          <button class="oit-close-btn" title="关闭">
+            <svg viewBox="0 0 24 24" fill="none">
+              <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" fill="currentColor"/>
+            </svg>
+          </button>
+        </div>
+        <div class="oit-panel-body">
+          <div class="oit-panel-section">
+            <div class="oit-panel-label">原文</div>
+            <div class="oit-panel-original">${escapeHtml(text)}</div>
+          </div>
+          <div class="oit-panel-divider"></div>
+          <div class="oit-panel-section">
+            <div class="oit-panel-label">译文</div>
+            <div class="oit-panel-translation">${escapeHtml(translation)}</div>
+          </div>
+        </div>
+        <div class="oit-panel-footer">
+          <button class="oit-copy-btn" title="复制译文">
+            <svg viewBox="0 0 24 24" fill="none">
+              <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z" fill="currentColor"/>
+            </svg>
+            <span>复制</span>
+          </button>
         </div>
       </div>`;
-    
+
     floatingPanel.querySelector('.oit-copy-btn').onclick = () => {
       navigator.clipboard.writeText(translation);
-      floatingPanel.querySelector('.oit-copy-btn').innerHTML = '<span style="font-size:12px">✓</span>';
+      const btn = floatingPanel.querySelector('.oit-copy-btn');
+      const originalContent = btn.innerHTML;
+      btn.innerHTML = `
+        <svg viewBox="0 0 24 24" fill="none" style="color:#34C759">
+          <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z" fill="currentColor"/>
+        </svg>
+        <span style="color:#34C759">已复制</span>`;
+      setTimeout(() => {
+        if (floatingPanel) btn.innerHTML = originalContent;
+      }, 2000);
     };
     floatingPanel.querySelector('.oit-close-btn').onclick = hideFloating;
-    
+
   } catch (error) {
     // 🔥 检查上下文失效错误
     if (error.message?.includes('Extension context invalidated')) {

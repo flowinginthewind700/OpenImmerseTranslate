@@ -132,20 +132,21 @@ a .oit-translation::after {
 
 /* 浮动翻译面板 */
 .oit-floating-panel {
-  min-width: 280px;
-  max-width: 400px;
+  width: 400px;
+  max-width: calc(100vw - 40px);
   background: white;
-  border-radius: 12px;
-  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.15), 0 2px 10px rgba(0, 0, 0, 0.1);
+  border-radius: 16px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.15), 0 8px 24px rgba(0, 0, 0, 0.08), 0 0 0 1px rgba(0, 0, 0, 0.04);
   overflow: hidden;
-  animation: oit-slideUp 0.25s ease;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans SC', sans-serif;
+  animation: oit-slideUp 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans SC', 'Microsoft YaHei', sans-serif;
+  backdrop-filter: blur(20px);
 }
 
 @media (prefers-color-scheme: dark) {
   .oit-floating-panel {
-    background: #1e1e2e;
-    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.4);
+    background: #1f1f28;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6), 0 8px 24px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(255, 255, 255, 0.05);
   }
 }
 
@@ -177,110 +178,183 @@ a .oit-translation::after {
 
 /* 面板内容 */
 .oit-panel-content {
-  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+/* 面板头部 */
+.oit-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+}
+
+.oit-panel-title {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+}
+
+.oit-panel-header .oit-close-btn {
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.2);
+  color: white;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+  backdrop-filter: blur(10px);
+}
+
+.oit-panel-header .oit-close-btn:hover {
+  background: rgba(255, 255, 255, 0.3);
+  transform: scale(1.05);
+}
+
+.oit-panel-header .oit-close-btn svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* 面板主体 */
+.oit-panel-body {
+  padding: 20px;
+  flex: 1;
+  overflow-y: auto;
+  max-height: 400px;
+}
+
+/* 面板区块 */
+.oit-panel-section {
+  margin-bottom: 16px;
+}
+
+.oit-panel-section:last-child {
+  margin-bottom: 0;
+}
+
+/* 标签 */
+.oit-panel-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: #9ca3af;
+  margin-bottom: 8px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .oit-panel-label {
+    color: #6b7280;
+  }
 }
 
 /* 原文区域 */
 .oit-panel-original {
-  font-size: 13px;
-  color: #666;
-  line-height: 1.6;
-  max-height: 80px;
-  overflow-y: auto;
+  font-size: 14px;
+  color: #6b7280;
+  line-height: 1.7;
   word-break: break-word;
+  padding: 12px;
+  background: #f9fafb;
+  border-radius: 10px;
+  border-left: 3px solid #e5e7eb;
 }
 
 @media (prefers-color-scheme: dark) {
   .oit-panel-original {
-    color: #999;
+    color: #9ca3af;
+    background: #1a1a24;
+    border-left-color: #374151;
   }
 }
 
 /* 分隔线 */
 .oit-panel-divider {
   height: 1px;
-  background: linear-gradient(to right, transparent, #e0e0e0, transparent);
-  margin: 12px 0;
+  background: linear-gradient(to right, transparent, #e5e7eb 20%, #e5e7eb 80%, transparent);
+  margin: 20px 0;
 }
 
 @media (prefers-color-scheme: dark) {
   .oit-panel-divider {
-    background: linear-gradient(to right, transparent, #333, transparent);
+    background: linear-gradient(to right, transparent, #374151 20%, #374151 80%, transparent);
   }
 }
 
 /* 翻译结果区域 */
 .oit-panel-translation {
   font-size: 15px;
-  color: #333333;
-  line-height: 1.7;
-  max-height: 150px;
-  overflow-y: auto;
+  color: #1f2937;
+  line-height: 1.8;
   word-break: break-word;
+  padding: 14px;
+  background: linear-gradient(135deg, #faf5ff 0%, #f3e8ff 100%);
+  border-radius: 10px;
+  border-left: 3px solid #a78bfa;
   font-weight: 500;
 }
 
 @media (prefers-color-scheme: dark) {
   .oit-panel-translation {
-    color: #e5e7eb;
+    color: #f3f4f6;
+    background: linear-gradient(135deg, #2d1b4e 0%, #1e1434 100%);
+    border-left-color: #8b5cf6;
   }
 }
 
-/* 操作按钮区域 */
-.oit-panel-actions {
+/* 面板底部 */
+.oit-panel-footer {
+  padding: 16px 20px;
+  background: #fafbfc;
+  border-top: 1px solid #e5e7eb;
   display: flex;
   justify-content: flex-end;
-  gap: 8px;
-  margin-top: 12px;
-  padding-top: 12px;
-  border-top: 1px solid #f0f0f0;
+  gap: 10px;
 }
 
 @media (prefers-color-scheme: dark) {
-  .oit-panel-actions {
-    border-top-color: #333;
+  .oit-panel-footer {
+    background: #16161f;
+    border-top-color: #2d2d3d;
   }
 }
 
-.oit-copy-btn,
-.oit-close-btn {
+/* 复制按钮 */
+.oit-copy-btn {
   display: flex;
   align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
+  gap: 6px;
+  padding: 10px 18px;
   border: none;
-  border-radius: 8px;
-  background: #f5f5f5;
-  color: #666;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  font-size: 14px;
+  font-weight: 600;
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: all 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
 }
 
-@media (prefers-color-scheme: dark) {
-  .oit-copy-btn,
-  .oit-close-btn {
-    background: #2a2a3e;
-    color: #aaa;
-  }
+.oit-copy-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(102, 126, 234, 0.4);
 }
 
-.oit-copy-btn:hover,
-.oit-close-btn:hover {
-  background: #e8e8e8;
-  color: #333;
+.oit-copy-btn:active {
+  transform: translateY(0);
 }
 
-@media (prefers-color-scheme: dark) {
-  .oit-copy-btn:hover,
-  .oit-close-btn:hover {
-    background: #3a3a4e;
-    color: #fff;
-  }
-}
-
-.oit-copy-btn svg,
-.oit-close-btn svg {
+.oit-copy-btn svg {
   width: 16px;
   height: 16px;
 }
@@ -323,26 +397,30 @@ a .oit-translation::after {
 }
 
 /* 滚动条样式 */
-.oit-panel-original::-webkit-scrollbar,
-.oit-panel-translation::-webkit-scrollbar {
-  width: 4px;
+.oit-panel-body::-webkit-scrollbar {
+  width: 6px;
 }
 
-.oit-panel-original::-webkit-scrollbar-track,
-.oit-panel-translation::-webkit-scrollbar-track {
+.oit-panel-body::-webkit-scrollbar-track {
   background: transparent;
 }
 
-.oit-panel-original::-webkit-scrollbar-thumb,
-.oit-panel-translation::-webkit-scrollbar-thumb {
-  background: #ccc;
-  border-radius: 2px;
+.oit-panel-body::-webkit-scrollbar-thumb {
+  background: #cbd5e0;
+  border-radius: 3px;
+}
+
+.oit-panel-body::-webkit-scrollbar-thumb:hover {
+  background: #a0aec0;
 }
 
 @media (prefers-color-scheme: dark) {
-  .oit-panel-original::-webkit-scrollbar-thumb,
-  .oit-panel-translation::-webkit-scrollbar-thumb {
-    background: #444;
+  .oit-panel-body::-webkit-scrollbar-thumb {
+    background: #4a5568;
+  }
+
+  .oit-panel-body::-webkit-scrollbar-thumb:hover {
+    background: #718096;
   }
 }
 
