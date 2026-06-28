@@ -92,6 +92,8 @@ const LANGUAGES = {
     customPrompt: '自定义翻译提示词（可选）',
     customPromptPlaceholder: '留空使用默认提示词，可用 {targetLang} 代替目标语言',
     maxTokens: '最大 Token 数',
+    maxConcurrent: '同时翻译路数',
+    maxConcurrentHint: '页面同时发起的翻译请求数（1–12，过高可能触发 API 限流）',
     temperature: 'Temperature (创造性 0-1)',
     
     // 错误提示
@@ -229,6 +231,8 @@ const LANGUAGES = {
     customPrompt: 'Custom Translation Prompt (Optional)',
     customPromptPlaceholder: 'Leave empty for default, use {targetLang} for target language',
     maxTokens: 'Max Tokens',
+    maxConcurrent: 'Concurrent translations',
+    maxConcurrentHint: 'Parallel translation requests from the page (1–12; higher values may hit rate limits)',
     temperature: 'Temperature (Creativity 0-1)',
     
     // Error messages

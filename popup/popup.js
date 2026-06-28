@@ -3,6 +3,13 @@
  * 弹出窗口的交互逻辑 + 国际化支持 + 模块化配置管理
  */
 
+/** 同时翻译路数（1–12） */
+function clampMaxConcurrent(value) {
+  const n = parseInt(value, 10);
+  if (!Number.isFinite(n)) return DEFAULT_GLOBAL_CONFIG.maxConcurrent;
+  return Math.min(12, Math.max(1, n));
+}
+
 // ==================== 模块化配置系统 ====================
 
 /**
@@ -19,6 +26,7 @@ const DEFAULT_GLOBAL_CONFIG = {
   customPrompt: '',
   maxTokens: 2048,
   temperature: 0.3,
+  maxConcurrent: 6,
   uiLanguage: ''
 };
 
@@ -26,73 +34,6 @@ const DEFAULT_GLOBAL_CONFIG = {
  * Provider 配置模板
  * 每个 provider 独立存储：endpoint, apiKey, modelName
  */
-const PROVIDER_DEFAULTS = {
-  google: {
-    endpoint: '',
-    model: '',
-    apiKey: '',
-    hintKey: 'hintGoogle',
-    needsApiKey: false,
-    displayName: 'Google 翻译'
-  },
-  deepseek: {
-    endpoint: 'https://api.deepseek.com/v1/chat/completions',
-    model: 'deepseek-chat',
-    apiKey: '',
-    hintKey: 'hintDeepSeek',
-    needsApiKey: true,
-    displayName: 'DeepSeek'
-  },
-  openai: {
-    endpoint: 'https://api.openai.com/v1/chat/completions',
-    model: 'gpt-4o-mini',
-    apiKey: '',
-    hintKey: 'hintOpenAI',
-    needsApiKey: true,
-    displayName: 'OpenAI'
-  },
-  anthropic: {
-    endpoint: 'https://api.anthropic.com/v1/messages',
-    model: 'claude-3-haiku-20240307',
-    apiKey: '',
-    hintKey: 'hintAnthropic',
-    needsApiKey: true,
-    displayName: 'Claude'
-  },
-  moonshot: {
-    endpoint: 'https://api.moonshot.cn/v1/chat/completions',
-    model: 'moonshot-v1-8k',
-    apiKey: '',
-    hintKey: 'hintMoonshot',
-    needsApiKey: true,
-    displayName: 'Moonshot'
-  },
-  zhipu: {
-    endpoint: 'https://open.bigmodel.cn/api/paas/v4/chat/completions',
-    model: 'glm-4-flash',
-    apiKey: '',
-    hintKey: 'hintZhipu',
-    needsApiKey: true,
-    displayName: '智谱 GLM'
-  },
-  ollama: {
-    endpoint: 'http://localhost:11434/api/chat',
-    model: 'qwen3',
-    apiKey: '',
-    hintKey: 'hintOllama',
-    needsApiKey: false,
-    displayName: 'Ollama'
-  },
-  custom: {
-    endpoint: '',
-    model: '',
-    apiKey: '',
-    hintKey: 'hintCustom',
-    needsApiKey: true,
-    displayName: '自定义 API'
-  }
-};
-
 /**
  * 配置管理器 - 模块化存储和读取配置
  */
@@ -147,21 +88,21 @@ const ConfigManager = {
         this.STORAGE_KEY_GLOBAL,
         this.STORAGE_KEY_PROVIDERS
       ]);
-      
+
       // 安全获取存储的全局配置
       const savedGlobal = this._safeGet(result, this.STORAGE_KEY_GLOBAL, {});
       this._globalConfig = {
         ...DEFAULT_GLOBAL_CONFIG,
         ...savedGlobal
       };
-      
+
       // 安全获取存储的 Provider 配置
       const savedProviders = this._safeGet(result, this.STORAGE_KEY_PROVIDERS, {});
       this._providerConfigs = {};
-      
+
       // 合并默认配置和已保存的配置
       for (const [providerId, defaults] of Object.entries(PROVIDER_DEFAULTS)) {
-        if (!defaults) continue; // 跳过无效的 provider
+        if (!defaults) continue;
         const savedProvider = this._safeGet(savedProviders, providerId, {});
         this._providerConfigs[providerId] = {
           endpoint: defaults.endpoint || '',
@@ -170,12 +111,12 @@ const ConfigManager = {
           ...savedProvider
         };
       }
-      
+
       console.log('[ConfigManager] Loaded config:', {
         global: this._globalConfig,
         providers: Object.keys(this._providerConfigs)
       });
-      
+
     } catch (error) {
       console.error('[ConfigManager] Failed to load:', error);
       this._globalConfig = { ...DEFAULT_GLOBAL_CONFIG };
@@ -301,6 +242,7 @@ const ConfigManager = {
       customPrompt: global.customPrompt || '',
       maxTokens: global.maxTokens || 2048,
       temperature: global.temperature || 0.3,
+      maxConcurrent: clampMaxConcurrent(global.maxConcurrent),
       uiLanguage: global.uiLanguage || ''  // 🔥 添加UI语言配置
     };
   },
@@ -315,60 +257,6 @@ const ConfigManager = {
     return !!config.apiKey;
   },
   
-  /**
-   * 迁移旧版配置（兼容性）
-   */
-  async migrateOldConfig() {
-    try {
-      const result = await chrome.storage.sync.get('config');
-      const oldConfig = result?.config;
-      
-      // 验证旧配置是否有效
-      if (!oldConfig || typeof oldConfig !== 'object' || Array.isArray(oldConfig)) {
-        return; // 没有需要迁移的配置
-      }
-      
-      // 验证 provider 是否有效
-      const validProvider = (
-        oldConfig.provider && 
-        typeof oldConfig.provider === 'string' &&
-        PROVIDER_DEFAULTS[oldConfig.provider]
-      ) ? oldConfig.provider : 'google';
-        
-        // 迁移全局配置
-        await this.saveGlobal({
-        provider: validProvider,
-        sourceLang: oldConfig.sourceLang || 'auto',
-        targetLang: oldConfig.targetLang || 'zh-CN',
-        translationStyle: oldConfig.translationStyle || 'accurate',
-        showOriginal: oldConfig.showOriginal !== false,
-        autoDetect: oldConfig.autoDetect !== false,
-        showFab: oldConfig.showFab !== false,
-        customPrompt: oldConfig.customPrompt || '',
-        maxTokens: oldConfig.maxTokens || 2048,
-        temperature: oldConfig.temperature || 0.3,
-        uiLanguage: oldConfig.uiLanguage || ''
-        });
-        
-        // 如果有 API Key，迁移到对应的 provider
-      if (oldConfig.apiKey && typeof oldConfig.apiKey === 'string') {
-        const providerDefaults = PROVIDER_DEFAULTS[validProvider] || {};
-        await this.saveProvider(validProvider, {
-          endpoint: oldConfig.apiEndpoint || providerDefaults.endpoint || '',
-          model: oldConfig.modelName || providerDefaults.model || '',
-          apiKey: oldConfig.apiKey
-          });
-        }
-        
-        // 删除旧配置
-        await chrome.storage.sync.remove('config');
-      console.log('[ConfigManager] Migrated old config successfully');
-      
-    } catch (error) {
-      console.error('[ConfigManager] Migration failed:', error);
-      // 迁移失败不应阻止应用继续运行
-    }
-  }
 };
 
 // 兼容旧代码的 currentConfig（将被逐步替换）
@@ -549,8 +437,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   applyI18n();
   initEventListeners();
   updateUI();
-  // 🔥 使用 StateManager 初始化状态同步
-  await StateManager.initSync();
+  // 🔥 性能优化：不阻塞 UI 渲染，异步同步翻译状态
+  // initSync 中的 getContentState() 需要 ping content script，
+  // 在大多数页面上 content script 未加载，会触发超时等待。
+  // 改为后台静默更新，UI 立即可用。
+  StateManager.initSync();
 });
 
 // 应用国际化
@@ -589,7 +480,7 @@ async function handleLanguageChange(e) {
   currentConfig.uiLanguage = newLang;
   
   // 保存语言设置
-  await chrome.storage.sync.set({ config: currentConfig });
+  await ConfigManager.saveGlobal({ uiLanguage: newLang });
   
   // 重新应用国际化
   applyI18n();
@@ -647,6 +538,7 @@ function initElements() {
     
     customPrompt: document.getElementById('customPrompt'),
     maxTokens: document.getElementById('maxTokens'),
+    maxConcurrent: document.getElementById('maxConcurrent'),
     temperature: document.getElementById('temperature'),
     temperatureValue: document.getElementById('temperatureValue'),
     
@@ -746,75 +638,17 @@ async function copyConsole() {
 
 /**
  * 解析并翻译错误消息
+ * Delegates to shared/providers.js parseTranslationError()
  */
 function parseErrorMessage(error) {
   const t = window.i18n.t;
-  const msg = error.message || error.toString() || '';
-  const msgLower = msg.toLowerCase();
-  
-  // 账户余额不足/暂停 - 优先检查
-  if (msgLower.includes('suspended') || 
-      msgLower.includes('insufficient balance') ||
-      msgLower.includes('recharge')) {
-    return t('errorInsufficientBalance');
+  const result = parseTranslationError(error);
+  // Use i18n if available, fall back to the English message
+  try {
+    return t(result.key) || result.message;
+  } catch (e) {
+    return result.message;
   }
-  
-  // API 密钥相关
-  if (msgLower.includes('invalid') && msgLower.includes('key') || 
-      msgLower.includes('unauthorized') || 
-      msgLower.includes('401')) {
-    return t('errorApiKeyInvalid');
-  }
-  
-  // 配额/限流相关
-  if (msgLower.includes('rate limit') || 
-      msgLower.includes('too many requests') ||
-      msgLower.includes('429') ||
-      msgLower.includes('concurrency')) {
-    return t('errorRateLimit');
-  }
-  
-  if (msgLower.includes('quota') || 
-      msgLower.includes('exceeded')) {
-    return t('errorQuotaExceeded');
-  }
-  
-  // 网络相关
-  if (msgLower.includes('network') || 
-      msgLower.includes('failed to fetch') ||
-      msgLower.includes('connection')) {
-    return t('errorNetworkFailed');
-  }
-  
-  if (msgLower.includes('timeout')) {
-    return t('errorTimeout');
-  }
-  
-  // 服务器错误
-  if (msgLower.includes('500') || 
-      msgLower.includes('502') ||
-      msgLower.includes('503') ||
-      msgLower.includes('server error')) {
-    return t('errorServerError');
-  }
-  
-  // 模型相关
-  if (msgLower.includes('model') && 
-      (msgLower.includes('not found') || msgLower.includes('does not exist'))) {
-    return t('errorModelNotFound');
-  }
-  
-  // 权限相关
-  if (msgLower.includes('permission') || msgLower.includes('403')) {
-    return t('errorPermissionDenied');
-  }
-  
-  // 返回原始消息（截断过长的）
-  if (msg.length > 100) {
-    return msg.substring(0, 100) + '...';
-  }
-  
-  return msg || t('errorUnknown');
 }
 
 /**
@@ -826,24 +660,20 @@ function escapeHtml(text) {
   return div.innerHTML;
 }
 
-// 加载配置
+// 加载配置（🔥 优化：单次 storage 读取完成所有初始化）
 async function loadConfig() {
   try {
-    // 先尝试迁移旧配置
-    await ConfigManager.migrateOldConfig();
-    
-    // 初始化配置管理器
     await ConfigManager.init();
-    
+
     // 兼容旧代码：设置 currentConfig
     currentConfig = ConfigManager.getCurrentFullConfig();
-    
+
     // 设置UI语言
     const global = ConfigManager.getGlobal();
     if (global.uiLanguage) {
       window.i18n.setLanguage(global.uiLanguage);
     }
-    
+
     console.log('[Popup] Config loaded:', currentConfig);
   } catch (error) {
     console.error('Failed to load config:', error);
@@ -865,6 +695,7 @@ async function saveConfig() {
       customPrompt: currentConfig.customPrompt,
       maxTokens: currentConfig.maxTokens,
       temperature: currentConfig.temperature,
+      maxConcurrent: clampMaxConcurrent(currentConfig.maxConcurrent),
       uiLanguage: currentConfig.uiLanguage
     });
     
@@ -970,6 +801,9 @@ function updateUI() {
   }
   elements.customPrompt.value = currentConfig.customPrompt;
   elements.maxTokens.value = currentConfig.maxTokens;
+  if (elements.maxConcurrent) {
+    elements.maxConcurrent.value = clampMaxConcurrent(currentConfig.maxConcurrent);
+  }
   elements.temperature.value = currentConfig.temperature;
   elements.temperatureValue.textContent = currentConfig.temperature;
   
@@ -1665,7 +1499,8 @@ async function handleSaveSettings() {
     autoDetect: elements.autoDetect.checked,
     customPrompt: elements.customPrompt.value.trim(),
     maxTokens: parseInt(elements.maxTokens.value) || 2048,
-    temperature: parseFloat(elements.temperature.value) || 0.3
+    temperature: parseFloat(elements.temperature.value) || 0.3,
+    maxConcurrent: clampMaxConcurrent(elements.maxConcurrent?.value)
   };
   
   await saveConfig();

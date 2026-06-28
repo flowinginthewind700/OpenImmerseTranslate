@@ -18,6 +18,7 @@ const INCLUDE_FILES = [
   'popup',
   'content',
   'background',
+  'shared',
   'styles',
   'icons'
 ];

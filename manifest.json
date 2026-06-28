@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Open Immerse Translate",
-  "version": "1.6.12",
+  "version": "1.6.13",
   "description": "开源沉浸式翻译插件 - 支持自定义LLM API的双语对照翻译工具",
   "permissions": [
     "storage",
@@ -30,7 +30,7 @@
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
-      "js": ["content/content.js"],
+      "js": ["shared/providers.js", "content/content.js"],
       "css": ["styles/content.css"],
       "run_at": "document_end"
     }
@@ -43,7 +43,7 @@
   },
   "web_accessible_resources": [
     {
-      "resources": ["styles/*", "icons/*"],
+      "resources": ["styles/*", "icons/*", "shared/*"],
       "matches": ["<all_urls>"]
     }
   ]

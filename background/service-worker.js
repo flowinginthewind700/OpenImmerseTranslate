@@ -5,6 +5,34 @@
 
 console.log('[OpenImmerseTranslate] Service worker started');
 
+// ==================== Shared translation helpers (inlined for MV3 module worker) ====================
+const TRANSLATION_SEPARATOR = '\n<<<OIT_SEP>>>\n';
+
+function parseTranslations(content) {
+  if (!content || typeof content !== 'string') return [];
+
+  const trimmed = content.trim();
+
+  if (trimmed.startsWith('[')) {
+    try {
+      const arr = JSON.parse(trimmed);
+      if (Array.isArray(arr)) {
+        return arr.map(p => String(p).trim()).filter(p => p.length > 0);
+      }
+    } catch (e) {
+      // fall through
+    }
+  }
+
+  if (content.includes('<<<OIT_SEP>>>')) {
+    const parts = content.split(/\s*<<<OIT_SEP>>>\s*/);
+    return parts.map(p => p.trim()).filter(p => p.length > 0);
+  }
+
+  const parts = content.split(/\s*\[SEP\]\s*/);
+  return parts.map(p => p.trim()).filter(p => p.length > 0);
+}
+
 // ==================== Tab 状态管理 ====================
 // 使用 Map 存储每个 tab 的翻译状态
 const tabStates = new Map();
@@ -54,6 +82,37 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   }
 });
 
+// ==================== 配置常量（兼容新的 modular storage）====================
+const DEFAULT_GLOBAL_CONFIG = {
+  provider: 'google',
+  sourceLang: 'auto',
+  targetLang: 'zh-CN',
+  translationStyle: 'accurate',
+  showOriginal: true,
+  autoDetect: true,
+  customPrompt: '',
+  maxTokens: 2048,
+  temperature: 0.3,
+  maxConcurrent: 6
+};
+
+const PROVIDER_DEFAULTS_SW = {
+  google:   { endpoint: '', model: '', needsApiKey: false },
+  deepseek: { endpoint: 'https://api.deepseek.com/v1/chat/completions', model: 'deepseek-chat', needsApiKey: true },
+  openai:   { endpoint: 'https://api.openai.com/v1/chat/completions', model: 'gpt-4o-mini', needsApiKey: true },
+  anthropic:{ endpoint: 'https://api.anthropic.com/v1/messages', model: 'claude-3-haiku-20240307', needsApiKey: true },
+  moonshot: { endpoint: 'https://api.moonshot.cn/v1/chat/completions', model: 'moonshot-v1-8k', needsApiKey: true },
+  zhipu:    { endpoint: 'https://open.bigmodel.cn/api/paas/v4/chat/completions', model: 'glm-4-flash', needsApiKey: true },
+  ollama:   { endpoint: 'http://localhost:11434/api/chat', model: 'qwen3', needsApiKey: false },
+  custom:   { endpoint: '', model: '', needsApiKey: true }
+};
+
+function clampMaxConcurrentFromConfig(value) {
+  const n = parseInt(value, 10);
+  if (!Number.isFinite(n)) return DEFAULT_GLOBAL_CONFIG.maxConcurrent;
+  return Math.min(12, Math.max(1, n));
+}
+
 // ==================== 请求限流器 ====================
 class RateLimiter {
   constructor(maxConcurrent = 2, minInterval = 1000) {
@@ -61,7 +120,8 @@ class RateLimiter {
     this.minInterval = minInterval;       // 最小请求间隔(ms)
     this.activeRequests = 0;
     this.lastRequestTime = 0;
-    this.queue = [];
+    // Event-driven: queue of resolve callbacks instead of polling
+    this.waitQueue = [];
   }
   
   async acquire() {
@@ -69,18 +129,17 @@ class RateLimiter {
       const tryAcquire = () => {
         const now = Date.now();
         const timeSinceLastRequest = now - this.lastRequestTime;
-        
-        if (this.activeRequests < this.maxConcurrent && timeSinceLastRequest >= this.minInterval) {
+
+        if (this.activeRequests >= this.maxConcurrent) {
+          // 并发槽位满：排队等待 release() 唤醒
+          this.waitQueue.push(() => tryAcquire());
+        } else if (timeSinceLastRequest < this.minInterval) {
+          // 间隔不足：setTimeout 自唤醒，不依赖 release()
+          setTimeout(tryAcquire, this.minInterval - timeSinceLastRequest + 10);
+        } else {
           this.activeRequests++;
           this.lastRequestTime = now;
           resolve();
-        } else {
-          // 计算需要等待的时间
-          const waitTime = Math.max(
-            this.minInterval - timeSinceLastRequest,
-            this.activeRequests >= this.maxConcurrent ? 500 : 0
-          );
-          setTimeout(tryAcquire, Math.max(waitTime, 100));
         }
       };
       tryAcquire();
@@ -89,10 +148,22 @@ class RateLimiter {
   
   release() {
     this.activeRequests = Math.max(0, this.activeRequests - 1);
+    // Wake up next waiter if any
+    if (this.waitQueue.length > 0) {
+      const next = this.waitQueue.shift();
+      // Schedule on next microtask to avoid stack overflow
+      Promise.resolve().then(next);
+    }
+  }
+
+  /** 与页面配置同步并发上限（每次 translate 前调用） */
+  applyConfig(config) {
+    const max = clampMaxConcurrentFromConfig(config?.maxConcurrent);
+    this.maxConcurrent = max;
   }
 }
 
-const rateLimiter = new RateLimiter(3, 300); // 最多3并发，间隔300ms（极速模式）
+const rateLimiter = new RateLimiter(6, 300);
 
 // ==================== 重试机制 ====================
 async function withRetry(fn, maxRetries = 3, baseDelay = 2000) {
@@ -103,7 +174,12 @@ async function withRetry(fn, maxRetries = 3, baseDelay = 2000) {
       return await fn();
     } catch (error) {
       lastError = error;
-      
+
+      // 用户主动取消，不重试
+      if (isAbortError(error)) {
+        throw error;
+      }
+
       // 检查是否是限流错误
       const isRateLimitError = error.message && (
         error.message.includes('concurrency') ||
@@ -111,7 +187,7 @@ async function withRetry(fn, maxRetries = 3, baseDelay = 2000) {
         error.message.includes('too many requests') ||
         error.message.includes('429')
       );
-      
+
       if (isRateLimitError && attempt < maxRetries - 1) {
         // 指数退避
         const delay = baseDelay * Math.pow(2, attempt);
@@ -119,7 +195,7 @@ async function withRetry(fn, maxRetries = 3, baseDelay = 2000) {
         await sleep(delay);
         continue;
       }
-      
+
       // 其他错误直接抛出
       if (!isRateLimitError) {
         throw error;
@@ -134,6 +210,36 @@ function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+// ==================== In-flight 请求取消管理 ====================
+const inflightControllers = new Map();
+
+function createRequestController(requestId) {
+  if (!requestId) return null;
+  const controller = new AbortController();
+  inflightControllers.set(requestId, controller);
+  return controller;
+}
+
+function removeRequestController(requestId) {
+  if (requestId) inflightControllers.delete(requestId);
+}
+
+function abortRequest(requestId) {
+  const controller = inflightControllers.get(requestId);
+  if (controller) {
+    controller.abort();
+    inflightControllers.delete(requestId);
+    console.log(`[OpenImmerseTranslate] Aborted request ${requestId}`);
+    return true;
+  }
+  return false;
+}
+
+function isAbortError(error) {
+  return error && (error.name === 'AbortError' ||
+    (error.message && error.message.toLowerCase().includes('abort')));
+}
+
 // ==================== 消息监听 ====================
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const tabId = sender.tab?.id;
@@ -143,10 +249,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     try {
       switch (message.action) {
         case 'translate':
-          const translations = await handleTranslate(message.texts, message.config);
-          sendResponse({ translations });
+          const translations = await handleTranslate(message.texts, message.config, message.requestId);
+          sendResponse(translations === null ? { cancelled: true } : { translations });
           break;
-          
+
+        case 'abortRequest':
+          const aborted = abortRequest(message.requestId);
+          sendResponse({ success: aborted });
+          break;
+
         case 'testApi':
           const testResult = await handleTestApi(message.config);
           sendResponse(testResult);
@@ -212,89 +323,119 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 // ==================== 翻译处理 ====================
-async function handleTranslate(texts, config) {
+async function handleTranslate(texts, config, requestId) {
   if (!texts || texts.length === 0) {
     return [];
   }
-  
+
+  rateLimiter.applyConfig(config);
+  const controller = createRequestController(requestId);
+  const signal = controller?.signal;
+
   // Google 翻译使用单独的处理流程
   if (config.provider === 'google') {
-    return await handleGoogleTranslate(texts, config);
+    try {
+      return await handleGoogleTranslate(texts, config, signal);
+    } finally {
+      removeRequestController(requestId);
+    }
   }
-  
+
   // 使用限流器
   await rateLimiter.acquire();
-  
+
   try {
     // 带重试的翻译请求
     return await withRetry(async () => {
+      if (signal?.aborted) {
+        throw new Error('Request aborted');
+      }
       const systemPrompt = buildSystemPrompt(config);
-      const userPrompt = buildUserPrompt(texts, config);
-      
+      const userPrompt = buildUserPrompt(texts);
+
       switch (config.provider) {
         case 'anthropic':
-          return await callAnthropicApi(systemPrompt, userPrompt, config);
+          return await callAnthropicApi(systemPrompt, userPrompt, config, signal);
         case 'ollama':
-          return await callOllamaApi(systemPrompt, userPrompt, config);
+          return await callOllamaApi(systemPrompt, userPrompt, config, signal);
         default:
-          return await callOpenAICompatibleApi(systemPrompt, userPrompt, config);
+          return await callOpenAICompatibleApi(systemPrompt, userPrompt, config, signal);
       }
     });
+  } catch (error) {
+    if (isAbortError(error)) {
+      return null; // 取消标记
+    }
+    throw error;
   } finally {
+    removeRequestController(requestId);
     rateLimiter.release();
   }
 }
 
 // ==================== Google 翻译 ====================
-async function handleGoogleTranslate(texts, config) {
+async function handleGoogleTranslate(texts, config, signal) {
   const results = [];
   const sourceLang = config.sourceLang || 'auto';
   const targetLang = convertToGoogleLangCode(config.targetLang);
-  
+
   for (const text of texts) {
+    if (signal?.aborted) break;
     await rateLimiter.acquire();
     try {
-      const translation = await callGoogleTranslateApi(text, sourceLang, targetLang);
+      const translation = await callGoogleTranslateApi(text, sourceLang, targetLang, signal);
       results.push(translation);
     } catch (error) {
+      if (isAbortError(error)) break;
       console.error('[OpenImmerseTranslate] Google translate error:', error);
       results.push(text); // 失败时返回原文
     } finally {
       rateLimiter.release();
     }
   }
-  
+
   return results;
 }
 
 // 转换语言代码为 Google 格式
+/**
+ * Convert internal language codes to Google Translate API codes.
+ * 
+ * Google Translate uses BCP-47 / ISO 639-1 codes.
+ * Our internal codes already match Google's for all supported languages,
+ * but we keep an explicit mapping for clarity and future-proofing.
+ * 
+ * Ref: https://cloud.google.com/translate/docs/languages
+ */
 function convertToGoogleLangCode(langCode) {
+  // All supported languages and their Google Translate codes
   const mapping = {
-    'zh-CN': 'zh-CN',
-    'zh-TW': 'zh-TW',
-    'en': 'en',
-    'ja': 'ja',
-    'ko': 'ko',
-    'fr': 'fr',
-    'de': 'de',
-    'es': 'es',
-    'ru': 'ru',
-    'ar': 'ar',
-    'pt': 'pt',
-    'it': 'it',
-    'vi': 'vi',
-    'th': 'th'
+    'auto':   'auto',    // Auto-detect
+    'zh-CN':  'zh-CN',   // Chinese (Simplified)
+    'zh-TW':  'zh-TW',   // Chinese (Traditional)
+    'en':     'en',      // English
+    'ja':     'ja',      // Japanese
+    'ko':     'ko',      // Korean
+    'fr':     'fr',      // French
+    'de':     'de',      // German
+    'es':     'es',      // Spanish
+    'ru':     'ru',      // Russian
+    'ar':     'ar',      // Arabic
+    'pt':     'pt',      // Portuguese
+    'it':     'it',      // Italian
+    'vi':     'vi',      // Vietnamese
+    'th':     'th',      // Thai
   };
   return mapping[langCode] || langCode;
 }
 
 // 调用 Google 翻译 API（免费版）
-async function callGoogleTranslateApi(text, sourceLang, targetLang) {
-  // 使用 Google 翻译的公共 API
+async function callGoogleTranslateApi(text, sourceLang, targetLang, signal) {
   const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=${sourceLang}&tl=${targetLang}&dt=t&q=${encodeURIComponent(text)}`;
-  
+
   const response = await fetch(url, {
     method: 'GET',
+    signal,
     headers: {
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
     }
@@ -371,46 +512,40 @@ function buildSystemPrompt(config) {
 3. 如果已是${targetLang}，返回原文
 4. 只返回翻译结果，不加解释
 
-格式：多段用 [SEP] 分隔，输出对应分隔`;
+格式：多段用 "${TRANSLATION_SEPARATOR}" 分隔，输出对应分隔`;
 }
 
 /**
  * 构建用户提示词
- * 🔥 性能优化: 使用快速路径处理单文本,预分配数组容量
+ * Delegates to shared/providers.js (but we inline separator joining for speed)
  */
 function buildUserPrompt(texts) {
-  // 🔥 快速路径: 单个文本直接返回
+  // This is effectively what buildTranslationPrompt() does minus the surrounding instructions
+  // We keep the fast-path logic for single/batch texts
   if (texts.length === 1) return texts[0];
-
-  // 🔥 空检查
   if (texts.length === 0) return '';
-
-  // 🔥 预分配数组容量,避免多次扩容
   const parts = new Array(texts.length * 2 - 1);
   for (let i = 0; i < texts.length; i++) {
     parts[i * 2] = texts[i];
     if (i < texts.length - 1) {
-      parts[i * 2 + 1] = ' [SEP] ';
+      parts[i * 2 + 1] = TRANSLATION_SEPARATOR;
     }
   }
   return parts.join('');
 }
 
 // ==================== API 调用 ====================
-async function callOpenAICompatibleApi(systemPrompt, userPrompt, config) {
-  // 构建请求头，Ollama 不需要 API Key
-  const headers = {
-    'Content-Type': 'application/json'
-  };
-  
-  // 只有在有 API Key 时才添加 Authorization 头
+async function callOpenAICompatibleApi(systemPrompt, userPrompt, config, signal) {
+  const headers = { 'Content-Type': 'application/json' };
+
   if (config.apiKey && config.apiKey.trim()) {
     headers['Authorization'] = `Bearer ${config.apiKey}`;
   }
-  
+
   const response = await fetch(config.apiEndpoint, {
     method: 'POST',
-    headers: headers,
+    signal,
+    headers,
     body: JSON.stringify({
       model: config.modelName,
       messages: [
@@ -435,42 +570,35 @@ async function callOpenAICompatibleApi(systemPrompt, userPrompt, config) {
 }
 
 // Ollama 原生 API 调用
-async function callOllamaApi(systemPrompt, userPrompt, config) {
-  // Ollama 原生 API 端点是 /api/chat
+async function callOllamaApi(systemPrompt, userPrompt, config, signal) {
   let endpoint = config.apiEndpoint;
-  
-  // 自动修正端点
+
   if (endpoint.includes('/v1/chat/completions')) {
     endpoint = endpoint.replace('/v1/chat/completions', '/api/chat');
   } else if (!endpoint.includes('/api/')) {
     endpoint = endpoint.replace(/\/$/, '') + '/api/chat';
   }
-  
+
   console.log('[OpenImmerseTranslate] Ollama endpoint:', endpoint);
-  
-  const requestBody = {
-    model: config.modelName,
-    messages: [
-      { role: 'system', content: systemPrompt },
-      { role: 'user', content: userPrompt }
-    ],
-    stream: false,
-    options: {
-      temperature: config.temperature || 0.3
-    }
-  };
-  
-  console.log('[OpenImmerseTranslate] Ollama request:', JSON.stringify(requestBody).substring(0, 200));
-  
-  // Chrome 扩展的 service worker 可以发起跨域请求
-  // 但需要确保 host_permissions 包含目标域
+
   const response = await fetch(endpoint, {
     method: 'POST',
+    signal,
     headers: {
       'Content-Type': 'application/json',
       'Accept': 'application/json'
     },
-    body: JSON.stringify(requestBody)
+    body: JSON.stringify({
+      model: config.modelName,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt }
+      ],
+      stream: false,
+      options: {
+        temperature: config.temperature || 0.3
+      }
+    })
   });
   
   console.log('[OpenImmerseTranslate] Ollama response status:', response.status);
@@ -498,9 +626,10 @@ async function callOllamaApi(systemPrompt, userPrompt, config) {
   return parseTranslations(content);
 }
 
-async function callAnthropicApi(systemPrompt, userPrompt, config) {
+async function callAnthropicApi(systemPrompt, userPrompt, config, signal) {
   const response = await fetch(config.apiEndpoint, {
     method: 'POST',
+    signal,
     headers: {
       'Content-Type': 'application/json',
       'x-api-key': config.apiKey,
@@ -528,10 +657,7 @@ async function callAnthropicApi(systemPrompt, userPrompt, config) {
   return parseTranslations(content);
 }
 
-function parseTranslations(content) {
-  const parts = content.split(/\s*\[SEP\]\s*/);
-  return parts.map(p => p.trim()).filter(p => p.length > 0);
-}
+// parseTranslations() and buildTranslationPrompt() are now in shared/providers.js
 
 // ==================== 测试 API ====================
 async function handleTestApi(config) {
@@ -568,6 +694,31 @@ async function handleTestApi(config) {
   }
 }
 
+// ==================== 配置组装（兼容新的 modular storage）====================
+async function getFullConfigForContextMenu() {
+  const result = await chrome.storage.sync.get(['globalConfig', 'providerConfigs']);
+  const global = { ...DEFAULT_GLOBAL_CONFIG, ...(result.globalConfig || {}) };
+  const providerId = global.provider || 'google';
+  const providerSaved = (result.providerConfigs || {})[providerId] || {};
+  const providerDefaults = PROVIDER_DEFAULTS_SW[providerId] || PROVIDER_DEFAULTS_SW.custom;
+
+  return {
+    provider: providerId,
+    apiEndpoint: providerSaved.endpoint || providerDefaults.endpoint,
+    apiKey: providerSaved.apiKey || '',
+    modelName: providerSaved.model || providerDefaults.model,
+    sourceLang: global.sourceLang || 'auto',
+    targetLang: global.targetLang || 'zh-CN',
+    translationStyle: global.translationStyle || 'accurate',
+    showOriginal: global.showOriginal !== false,
+    autoDetect: global.autoDetect !== false,
+    customPrompt: global.customPrompt || '',
+    maxTokens: global.maxTokens || 2048,
+    temperature: global.temperature || 0.3,
+    maxConcurrent: clampMaxConcurrentFromConfig(global.maxConcurrent)
+  };
+}
+
 // ==================== 右键菜单 ====================
 chrome.runtime.onInstalled.addListener(() => {
   chrome.contextMenus.create({
@@ -575,7 +726,7 @@ chrome.runtime.onInstalled.addListener(() => {
     title: '翻译整个页面',
     contexts: ['page']
   });
-  
+
   chrome.contextMenus.create({
     id: 'removeTranslations',
     title: '移除翻译',
@@ -585,27 +736,25 @@ chrome.runtime.onInstalled.addListener(() => {
 
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   if (!tab?.id) return;
-  
+
   switch (info.menuItemId) {
-    case 'translatePage':
-      const result = await chrome.storage.sync.get('config');
-      const config = result.config || {};
-      
-      // 检查是否需要 API Key（Google 和 Ollama 不需要）
-      const noKeyProviders = ['google', 'ollama'];
-      const needsApiKey = !noKeyProviders.includes(config.provider);
-      
-      if (needsApiKey && !config.apiKey) {
+    case 'translatePage': {
+      const config = await getFullConfigForContextMenu();
+
+      // 检查是否需要 API Key
+      const providerDefaults = PROVIDER_DEFAULTS_SW[config.provider] || PROVIDER_DEFAULTS_SW.custom;
+      if (providerDefaults.needsApiKey && !config.apiKey) {
         chrome.action.openPopup();
         return;
       }
-      
+
       chrome.tabs.sendMessage(tab.id, {
         action: 'translatePage',
-        config: config
+        config
       });
       break;
-      
+    }
+
     case 'removeTranslations':
       chrome.tabs.sendMessage(tab.id, { action: 'removeTranslations' });
       break;
