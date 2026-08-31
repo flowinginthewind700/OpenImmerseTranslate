@@ -1,3 +1,5 @@
+
+
 <div align="center">
 
 # 🌐 Open Immerse Translate
@@ -239,6 +241,7 @@ OpenImmerseTranslate/
 ├── popup/                  # 弹出窗口 UI
 ├── content/                # 内容脚本（翻译核心）
 ├── background/             # 后台服务（API 请求）
+├── shared/                 # 共享脚本
 ├── styles/                 # 样式文件
 └── icons/                  # 图标资源
 ```
