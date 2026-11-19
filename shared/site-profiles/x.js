@@ -58,6 +58,9 @@
     '[role="complementary"][aria-label*="What is happening" i]'
   ].join(',');
   const SUPPLEMENTAL_CANDIDATE_SELECTOR = 'aside, [role="complementary"]';
+  const GENERIC_SUPPLEMENTAL_CANDIDATE_SELECTOR = [
+    'aside', '[role="complementary"]', 'section', 'div'
+  ].join(',');
   const SUPPLEMENTAL_TREND_SELECTOR = '[data-testid="trend"]';
   const USER_DESCRIPTION_SELECTOR = '[data-testid="UserDescription"]';
   const USER_CELL_SELECTOR = '[data-testid="UserCell"]';
@@ -121,6 +124,11 @@
   ].join(',');
   const CONTENT_ROOT_LIMIT = 120;
   const SUPPLEMENTAL_ROOT_LIMIT = 12;
+  const GENERIC_SUPPLEMENTAL_ANCHOR_LIMIT = 2400;
+  const GENERIC_SUPPLEMENTAL_ANCESTOR_DEPTH = 10;
+  const GENERIC_SUPPLEMENTAL_MIN_WIDTH = 96;
+  const GENERIC_SUPPLEMENTAL_MIN_HEIGHT = 72;
+  const GENERIC_SUPPLEMENTAL_MAX_TEXT_LENGTH = 16000;
   const NAVIGATION_CONTROL_LIMIT = 4000;
   const NAVIGATION_ANCESTOR_DEPTH = 20;
   const NAVIGATION_CLUSTER_CONTROL_LIMIT = 120;
@@ -161,6 +169,15 @@
       current = current.parentElement;
     }
     return depth;
+  }
+
+  function getRect(element) {
+    try {
+      return element?.getBoundingClientRect?.()
+        || { width: 0, height: 0, top: 0, right: 0, bottom: 0, left: 0 };
+    } catch (error) {
+      return { width: 0, height: 0, top: 0, right: 0, bottom: 0, left: 0 };
+    }
   }
 
   function getXPath(anchor) {
@@ -413,6 +430,101 @@
       .filter(isSupplementalRootCandidate);
   }
 
+  function isGenericSupplementalAnchor(anchor, options) {
+    if (!anchor?.matches?.(SUPPLEMENTAL_RICH_TEXT_SELECTOR)
+        || anchor.closest?.(POST_CONTAINER)
+        || anchor.closest?.(SUPPLEMENTAL_EXCLUSION_SELECTOR)) {
+      return false;
+    }
+    const isVisible = typeof options.isVisible === 'function'
+      ? options.isVisible
+      : element => Boolean(element?.isConnected);
+    if (!isVisible(anchor)) return false;
+    const rect = getRect(anchor);
+    const viewportWidth = options.viewport?.width
+      || globalThis.innerWidth
+      || anchor.ownerDocument?.documentElement?.clientWidth
+      || 0;
+    return rect.width > 0
+      && rect.height > 0
+      && (!viewportWidth || rect.left >= viewportWidth * 0.5);
+  }
+
+  function isGenericSupplementalRootCandidate(root, options) {
+    if (!root?.matches?.(GENERIC_SUPPLEMENTAL_CANDIDATE_SELECTOR)
+        || root.matches(POST_CONTAINER)
+        || root.closest?.(POST_CONTAINER)
+        || root.matches('main, [role="main"], nav, header, footer, body, html')
+        || root.closest?.('nav, header, footer')) {
+      return false;
+    }
+
+    const isVisible = typeof options.isVisible === 'function'
+      ? options.isVisible
+      : element => Boolean(element?.isConnected);
+    if (!isVisible(root)) return false;
+
+    const rect = getRect(root);
+    const viewportWidth = options.viewport?.width
+      || globalThis.innerWidth
+      || root.ownerDocument?.documentElement?.clientWidth
+      || 0;
+    if (rect.width < GENERIC_SUPPLEMENTAL_MIN_WIDTH
+        || rect.height < GENERIC_SUPPLEMENTAL_MIN_HEIGHT
+        || (viewportWidth && (
+          rect.left < viewportWidth * 0.5
+          || rect.width > viewportWidth * 0.62
+        ))) {
+      return false;
+    }
+
+    const text = String(root.textContent || '').replace(/\s+/g, ' ').trim();
+    if (text.length < 2 || text.length > GENERIC_SUPPLEMENTAL_MAX_TEXT_LENGTH) {
+      return false;
+    }
+
+    const richTextAnchors = collectMatches(root, SUPPLEMENTAL_RICH_TEXT_SELECTOR)
+      .filter(anchor => !anchor.closest?.(POST_CONTAINER))
+      .filter(anchor => !anchor.closest?.(SUPPLEMENTAL_EXCLUSION_SELECTOR))
+      .filter(isVisible);
+    const hasHeading = Boolean(root.querySelector?.(
+      'h1, h2, h3, h4, h5, h6, [role="heading"]'
+    ));
+    const hasKnownCard = Boolean(root.querySelector?.([
+      SUPPLEMENTAL_TREND_SELECTOR,
+      USER_DESCRIPTION_SELECTOR,
+      USER_CELL_SELECTOR
+    ].join(',')));
+    return richTextAnchors.length >= 2
+      || (hasHeading && richTextAnchors.length >= 1)
+      || (hasKnownCard && richTextAnchors.length >= 1);
+  }
+
+  function findGenericSupplementalRoots(base, options = {}) {
+    if (!base?.querySelectorAll) return [];
+    const roots = [];
+    const anchors = collectMatches(base, SUPPLEMENTAL_RICH_TEXT_SELECTOR)
+      .slice(0, GENERIC_SUPPLEMENTAL_ANCHOR_LIMIT);
+
+    for (const anchor of anchors) {
+      if (!isGenericSupplementalAnchor(anchor, options)) continue;
+      let current = anchor.parentElement;
+      for (let depth = 0;
+        current
+          && current.nodeType === 1
+          && !current.matches(POST_CONTAINER)
+          && !current.matches('nav, header, footer, body, html')
+          && depth < GENERIC_SUPPLEMENTAL_ANCESTOR_DEPTH;
+        depth++, current = current.parentElement
+      ) {
+        if (isGenericSupplementalRootCandidate(current, options)) {
+          roots.push(current);
+        }
+      }
+    }
+    return normalizeSupplementalRoots(roots);
+  }
+
   function diagnoseAdaptiveRoots(base = globalThis.document?.body) {
     if (!base?.querySelectorAll) return [];
     const candidates = [
@@ -498,7 +610,8 @@
     const limit = Math.max(1, Number(options.limit) || SUPPLEMENTAL_ROOT_LIMIT);
     const roots = [
       ...collectMatches(base, SUPPLEMENTAL_ROOT_SELECTOR),
-      ...findSupplementalEvidenceRoots(base)
+      ...findSupplementalEvidenceRoots(base),
+      ...findGenericSupplementalRoots(base, options)
     ]
       .filter(root => isVisible(root))
       .slice(0, limit);
@@ -526,9 +639,15 @@
     if (!root && normalized.querySelectorAll) {
       root = [
         ...collectMatches(normalized, SUPPLEMENTAL_ROOT_SELECTOR),
-        ...findSupplementalEvidenceRoots(normalized)
+        ...findSupplementalEvidenceRoots(normalized),
+        ...findGenericSupplementalRoots(normalized, options)
       ]
         .find(candidate => candidate.isConnected) || null;
+    }
+    if (!root) {
+      root = findGenericSupplementalRoots(normalized, options)
+        .find(candidate => candidate === normalized || candidate.contains(normalized))
+        || null;
     }
     if (!root) return null;
 

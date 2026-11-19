@@ -234,7 +234,7 @@ const CONFIG = {
   COMPLETION_IDLE: 400,
   MUTATION_ATTRIBUTES: [
     'class', 'style', 'hidden', 'aria-hidden', 'aria-expanded', 'open',
-    'role', 'translate', 'contenteditable'
+    'role', 'translate', 'contenteditable', 'aria-label', 'title'
   ],
 
   // 扫描限制
@@ -593,8 +593,8 @@ let selectionInflightRequest = null;
 let translatedCheckCache = new WeakMap();
 const OWNED_TRANSLATION_SELECTOR = '.oit-wrapper, .oit-translated-host, .oit-translation, .oit-original';
 const TRANSLATION_OUTPUT_SELECTOR = '.oit-translation';
-const SOURCE_LAYOUT_SELECTOR = '.oit-original, .oit-original-flow, .oit-wrapper, .oit-direct-text-run';
-const OWNED_MUTATION_NODE_SELECTOR = '.oit-translation, .oit-original, .oit-original-flow, .oit-wrapper, .oit-direct-text-run';
+const SOURCE_LAYOUT_SELECTOR = '.oit-original, .oit-original-flow, .oit-wrapper, .oit-direct-text-run, .oit-attribute-label-host';
+const OWNED_MUTATION_NODE_SELECTOR = '.oit-translation, .oit-original, .oit-original-flow, .oit-wrapper, .oit-direct-text-run, .oit-attribute-label-host';
 const OWNED_HOST_CLASS_TOKENS = new Set([
   'oit-translated-host',
   'oit-pending',
@@ -1484,6 +1484,7 @@ function refreshTranslationBlock(block) {
   block.template = current.template;
   block.inlineTemplate = current.inlineTemplate;
   block.inPlaceTemplate = current.inPlaceTemplate;
+  block.forceMonolingual = current.forceMonolingual;
   block.sourceSnapshot = current.sourceSnapshot;
   block.textNode = null;
   return true;
@@ -1969,6 +1970,13 @@ function hasHiddenInlineStyle(value) {
 function attributeMutationRevealsContent(mutation) {
   const attribute = mutation.attributeName;
   if (DYNAMIC_STRUCTURE_ATTRIBUTES.has(attribute)) return true;
+  if (attribute === 'aria-label' || attribute === 'title') {
+    const currentValue = translationCore.normalizeWhitespace(
+      mutation.target.getAttribute?.(attribute)
+    );
+    return Boolean(currentValue)
+      && currentValue !== translationCore.normalizeWhitespace(mutation.oldValue);
+  }
   if (!['class', 'style'].includes(attribute)) return false;
   if (typeof mutation.oldValue !== 'string') return false;
 
@@ -2003,6 +2011,13 @@ function handleDynamicMutations(mutations) {
     } else if (mutation.type === 'attributes') {
       ignored = isInsideTranslationOutput(target) || isOwnedClassMutation(mutation);
       if (target && !ignored && attributeMutationRevealsContent(mutation)) {
+        if (mutation.attributeName === 'aria-label'
+            || mutation.attributeName === 'title') {
+          const attributeHost = Array.from(target.children || []).find(child => (
+            child.matches?.('.oit-attribute-label-host')
+          ));
+          if (attributeHost) invalidateTranslationSource(attributeHost);
+        }
         state.pendingDynamicRoots.add(target);
         hasNewContent = true;
       }
@@ -2218,9 +2233,10 @@ function prepareTranslationBlock(element, extras = {}, options = {}) {
     };
   }
 
+  const forceMonolingual = element.matches?.('.oit-attribute-label-host');
   const inlineTemplate = translationCore.buildInlineTemplate(element);
   if (!inlineTemplate) return null;
-  const inPlaceTemplate = state.config?.showOriginal === false
+  const inPlaceTemplate = state.config?.showOriginal === false && !forceMonolingual
     ? translationCore.buildTextFlowTemplate(element)
     : null;
   const template = inPlaceTemplate || inlineTemplate;
@@ -2257,6 +2273,7 @@ function prepareTranslationBlock(element, extras = {}, options = {}) {
     template,
     inlineTemplate,
     inPlaceTemplate,
+    forceMonolingual,
     sourceSnapshot: translationSourceState.capture(element, visibleText),
     ...extras
   };
@@ -2752,7 +2769,9 @@ function applyTranslation(block, translation) {
     const record = block.kind === 'plain-text'
       ? applyPlainTextTranslation(block, translation)
       : (() => {
-        const showOriginal = state.config?.showOriginal !== false;
+        const showOriginal = block.forceMonolingual
+          ? false
+          : state.config?.showOriginal !== false;
         return !showOriginal && inPlaceTemplate
           ? translationCore.applyTranslationInPlace(element, translation, inPlaceTemplate)
           : translationCore.createTranslationView(element, translation, inlineTemplate, {

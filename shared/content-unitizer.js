@@ -18,6 +18,9 @@
 
   const DIRECT_TEXT_RUN_CLASS = 'oit-direct-text-run';
   const DIRECT_TEXT_RUN_SELECTOR = `.${DIRECT_TEXT_RUN_CLASS}`;
+  const ATTRIBUTE_LABEL_HOST_CLASS = 'oit-attribute-label-host';
+  const ATTRIBUTE_LABEL_HOST_SELECTOR = `.${ATTRIBUTE_LABEL_HOST_CLASS}`;
+  const ATTRIBUTE_LABEL_SOURCE_ATTRIBUTE = 'data-oit-source-label';
   const SEMANTIC_UNIT_SELECTOR = [
     'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p', 'blockquote', 'figcaption',
     'li', 'dt', 'dd', 'td', 'th', 'caption', 'label', 'legend', 'summary',
@@ -341,6 +344,42 @@
     return nodes;
   }
 
+  function getControlAttributeLabel(control) {
+    const label = normalizeText(
+      control?.getAttribute?.('aria-label')
+        || control?.getAttribute?.('title')
+    );
+    return hasReadableText(label) ? label : '';
+  }
+
+  function findAttributeLabelHost(control) {
+    return Array.from(control?.children || []).find(child => (
+      child.matches?.(ATTRIBUTE_LABEL_HOST_SELECTOR)
+    )) || null;
+  }
+
+  function ensureAttributeLabelHost(control, label) {
+    const existing = findAttributeLabelHost(control);
+    if (existing) {
+      const previous = existing.getAttribute(ATTRIBUTE_LABEL_SOURCE_ATTRIBUTE);
+      if (previous !== label
+          && !existing.classList.contains('oit-translated-host')) {
+        existing.textContent = label;
+      }
+      existing.setAttribute(ATTRIBUTE_LABEL_SOURCE_ATTRIBUTE, label);
+      return existing;
+    }
+
+    const doc = control.ownerDocument || document;
+    const host = doc.createElement('span');
+    host.className = ATTRIBUTE_LABEL_HOST_CLASS;
+    host.setAttribute('data-oit-unit', 'attribute-label');
+    host.setAttribute(ATTRIBUTE_LABEL_SOURCE_ATTRIBUTE, label);
+    host.textContent = label;
+    control.appendChild(host);
+    return host;
+  }
+
   function getCandidateSummary(element, naturalNodes, control, options = {}) {
     const labelNodes = naturalNodes.filter(node => (
       node.parentElement === element || element.contains(node.parentElement)
@@ -428,12 +467,21 @@
     const controlSelector = options.controlSelector || CONTROL_SELECTOR;
     if (!control.matches?.(controlSelector)) return null;
 
+    const attributeLabel = getControlAttributeLabel(control);
+    const existingAttributeHost = findAttributeLabelHost(control);
+    if (attributeLabel && existingAttributeHost) {
+      return ensureAttributeLabelHost(control, attributeLabel);
+    }
     const textNodes = collectControlTextNodes(control, options);
     const naturalNodes = textNodes.filter(node => (
       hasReadableText(node.nodeValue)
       && !isAuxiliaryControlText(node, control, options)
     ));
-    if (naturalNodes.length === 0) return null;
+    if (naturalNodes.length === 0) {
+      return attributeLabel
+        ? ensureAttributeLabelHost(control, attributeLabel)
+        : null;
+    }
 
     const candidateElements = new Set();
     for (const node of naturalNodes) {
@@ -472,6 +520,9 @@
   return Object.freeze({
     DIRECT_TEXT_RUN_CLASS,
     DIRECT_TEXT_RUN_SELECTOR,
+    ATTRIBUTE_LABEL_HOST_CLASS,
+    ATTRIBUTE_LABEL_HOST_SELECTOR,
+    ATTRIBUTE_LABEL_SOURCE_ATTRIBUTE,
     SEMANTIC_UNIT_SELECTOR,
     CONTROL_SELECTOR,
     SAFE_INLINE_LINK_SELECTOR,

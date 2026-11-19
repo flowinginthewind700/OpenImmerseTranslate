@@ -397,7 +397,11 @@
     if (!context?.adaptiveUiRoots) return 'missing-context';
     if (!root?.isConnected) return 'disconnected';
     if (isOwnedElement(root)) return 'owned-translation';
-    if (!isVisible(root, context)) return 'not-visible';
+    if (!uiPolicy.isVisibleAdaptiveUiRoot(root, {
+      isVisible: element => isVisible(element, context)
+    })) {
+      return 'not-visible';
+    }
     return null;
   }
 

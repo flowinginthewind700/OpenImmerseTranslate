@@ -202,6 +202,51 @@
         ) === null, 'timestamp-only control produced a translation host');
       });
 
+      test('attribute-labelled controls receive one stable synthetic text host', () => {
+        document.body.innerHTML = `
+          <nav>
+            <a id="aria-control" href="/home" aria-label="Home">
+              <svg aria-hidden="true"><path d="M0 0h12v12z"></path></svg>
+            </a>
+            <button id="title-control" type="button" title="More actions">
+              <svg aria-hidden="true"><path d="M0 0h12v12z"></path></svg>
+            </button>
+          </nav>
+        `;
+        const ariaControl = document.querySelector('#aria-control');
+        const titleControl = document.querySelector('#title-control');
+        const originalHref = ariaControl.getAttribute('href');
+        let clicks = 0;
+        ariaControl.addEventListener('click', () => clicks++);
+
+        const ariaHost = unitizer.findControlTranslationTarget(ariaControl, options);
+        const secondAriaHost = unitizer.findControlTranslationTarget(
+          ariaControl,
+          options
+        );
+        const titleHost = unitizer.findControlTranslationTarget(titleControl, options);
+
+        assert(ariaHost?.matches?.(unitizer.ATTRIBUTE_LABEL_HOST_SELECTOR),
+          'aria-label-only control did not receive a synthetic translation host');
+        assert(titleHost?.matches?.(unitizer.ATTRIBUTE_LABEL_HOST_SELECTOR),
+          'title-only control did not receive a synthetic translation host');
+        assert(ariaHost === secondAriaHost,
+          'repeated scan replaced the synthetic translation host');
+        assert(unitizer.normalizeText(ariaHost.textContent) === 'Home'
+            && unitizer.normalizeText(titleHost.textContent) === 'More actions',
+        'synthetic host did not expose the control attribute label as source text');
+        assert(ariaControl.querySelectorAll(unitizer.ATTRIBUTE_LABEL_HOST_SELECTOR).length === 1,
+          'repeated scan duplicated the synthetic host');
+        assert(document.querySelector('#aria-control') === ariaControl,
+          'attribute labelling replaced the interactive control');
+        assert(ariaControl.getAttribute('href') === originalHref,
+          'attribute labelling changed the control destination');
+        ariaControl.click();
+        assert(clicks === 1, 'attribute labelling removed the control listener');
+        assert(ariaHost.closest('a') === ariaControl,
+          'synthetic host detached from the source control');
+      });
+
       test('rendered labels win over hidden icon or status text', () => {
         document.body.innerHTML = `
           <a id="nested-control" href="/home"

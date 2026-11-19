@@ -407,6 +407,85 @@
         ), 'late navigation control was outside the discovered adaptive scope');
       });
 
+      test('locally visible navigation survives viewport overflow and adjacent scroll rails', () => {
+        document.body.innerHTML = `
+          <div id="wide-app-shell" style="display:block;width:1000px">
+            <div id="wide-topbar"
+                 style="display:flex;width:1000px;height:44px;overflow-x:auto">
+              <button id="wide-back" type="button" aria-label="Back"
+                      style="display:block;width:180px;height:34px">
+                <svg aria-hidden="true"><path d="M0 0h12v12z"></path></svg>
+              </button>
+              <button id="wide-more" type="button" aria-label="More"
+                      style="display:block;width:180px;height:34px">
+                <svg aria-hidden="true"><path d="M0 0h12v12z"></path></svg>
+              </button>
+              <button id="wide-share" type="button" aria-label="Share"
+                      style="display:block;width:180px;height:34px">
+                <svg aria-hidden="true"><path d="M0 0h12v12z"></path></svg>
+              </button>
+            </div>
+            <div id="tall-scroll-rail"
+                 style="display:block;width:220px;height:1100px;overflow-y:auto">
+              <a id="tall-home" href="/home" style="display:flex;width:200px;height:38px">
+                <span id="tall-home-label">Home</span>
+              </a>
+              <a id="tall-explore" href="/explore" style="display:flex;width:200px;height:38px">
+                <span id="tall-explore-label">Explore</span>
+              </a>
+              <a id="tall-messages" href="/messages" style="display:flex;width:200px;height:38px">
+                <span id="tall-messages-label">Messages</span>
+              </a>
+              <a id="tall-settings" href="/settings" style="display:flex;width:200px;height:38px">
+                <span id="tall-settings-label">Settings</span>
+              </a>
+            </div>
+            <main>
+              <article>
+                <p>Article prose remains independent from the scrolling application controls.</p>
+              </article>
+            </main>
+          </div>
+        `;
+
+        const roots = policy.findAdaptiveUiRoots(document.body);
+
+        assert(roots.includes(document.querySelector('#wide-topbar')),
+          'viewport-wide attribute-labelled toolbar was not discovered');
+        assert(roots.includes(document.querySelector('#tall-scroll-rail')),
+          'taller-than-viewport scrolling navigation rail was not discovered');
+        assert(policy.isAdaptiveUiLabel(document.querySelector('#wide-more')),
+          'attribute-labelled topbar control was outside adaptive UI scope');
+        assert(policy.isAdaptiveUiLabel(
+          document.querySelector('#tall-explore-label'),
+          roots
+        ), 'visible label inside the tall scrolling rail was rejected');
+      });
+
+      test('adaptive UI evidence can be supplied by a visible control in a zero-size shell', () => {
+        document.body.innerHTML = `
+          <div id="zero-size-header" style="display:block;width:0;height:0">
+            <button id="floating-more" type="button" aria-label="More"
+                    style="position:fixed;left:20px;top:20px;width:40px;height:36px">
+              <svg aria-hidden="true"><path d="M0 0h12v12z"></path></svg>
+            </button>
+            <button id="floating-settings" type="button" aria-label="Settings"
+                    style="position:fixed;left:70px;top:20px;width:80px;height:36px">
+              <svg aria-hidden="true"><path d="M0 0h12v12z"></path></svg>
+            </button>
+            <button id="floating-help" type="button" aria-label="Help"
+                    style="position:fixed;left:160px;top:20px;width:60px;height:36px">
+              <svg aria-hidden="true"><path d="M0 0h12v12z"></path></svg>
+            </button>
+          </div>
+          <main><p>Readable content proves the zero-size shell is not the reading root.</p></main>
+        `;
+
+        assert(policy.isVisibleAdaptiveUiRoot(
+          document.querySelector('#zero-size-header')
+        ), 'visible controls did not establish adaptive UI evidence for their shell');
+      });
+
       test('menus revealed through composed custom elements are recognized', () => {
         document.body.innerHTML = '<site-toolbar id="host"></site-toolbar>';
         const shadowRoot = document.querySelector('#host').attachShadow({ mode: 'open' });

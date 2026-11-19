@@ -121,11 +121,9 @@
           style = null;
         }
         const clipsX = style
-          && ['auto', 'clip', 'hidden', 'scroll']
-            .includes(style.overflowX || style.overflow);
+          && ['clip', 'hidden'].includes(style.overflowX || style.overflow);
         const clipsY = style
-          && ['auto', 'clip', 'hidden', 'scroll']
-            .includes(style.overflowY || style.overflow);
+          && ['clip', 'hidden'].includes(style.overflowY || style.overflow);
         if (clipsX || clipsY) {
           const clip = getRect(current);
           if (clipsY) {
@@ -196,8 +194,11 @@
   }
 
   function isAdaptiveUiLabel(element, roots = null) {
-    if (!element?.matches || !isWithinAdaptiveUiScope(element, roots)) return false;
-    return Boolean(composedClosest(element, INTERACTIVE_CONTROL_SELECTOR));
+    if (!element?.matches) return false;
+    const control = composedClosest(element, INTERACTIVE_CONTROL_SELECTOR);
+    if (!control) return false;
+    return isWithinAdaptiveUiScope(control, roots)
+      || Boolean(findAdaptiveUiRoot(control));
   }
 
   function median(values) {
@@ -283,7 +284,8 @@
 
     const rootText = normalizeText(element.textContent);
     const labelTextLength = labels.reduce((sum, label) => sum + label.length, 0);
-    if (!rootText || labelTextLength / rootText.length < 0.55) return false;
+    const labelDensity = labelTextLength / Math.max(labelTextLength, rootText.length);
+    if (labelTextLength === 0 || labelDensity < 0.55) return false;
 
     const prose = Array.from(element.querySelectorAll?.(NAVIGATION_PROSE_SELECTOR) || []);
     if (prose.some(item => !controls.some(control => control.contains(item)))) {
@@ -293,21 +295,38 @@
       return false;
     }
 
-    const rootRect = getRect(element);
     const viewport = options.viewport || {
-      width: globalThis.innerWidth || rootRect.width,
-      height: globalThis.innerHeight || rootRect.height
+      width: globalThis.innerWidth || getRect(element).width,
+      height: globalThis.innerHeight || getRect(element).height
     };
-    if (rootRect.width > viewport.width * 0.95
-        || rootRect.height > viewport.height * 0.95) {
-      return false;
-    }
 
     return hasNavigationLayout(
       labeledControls.map(item => item.rect),
       viewport,
       minimumControls
     );
+  }
+
+  function isVisibleAdaptiveUiRoot(element, options = {}) {
+    if (!element?.matches || !element.isConnected) return false;
+    const isVisible = typeof options.isVisible === 'function'
+      ? options.isVisible
+      : defaultIsVisible;
+    if (isVisible(element)) return true;
+
+    const limits = { ...DEFAULT_NAVIGATION_LIMITS, ...(options.limits || {}) };
+    const controls = element.querySelectorAll?.(INTERACTIVE_CONTROL_SELECTOR) || [];
+    let examined = 0;
+    for (const control of controls) {
+      if (examined++ >= limits.maxExaminedControls) break;
+      const label = getControlLabel(control);
+      if (isVisible(control)
+          && hasLexicalText(label)
+          && label.length <= limits.maxLabelLength) {
+        return true;
+      }
+    }
+    return false;
   }
 
   function collectMatches(base, selector) {
@@ -324,7 +343,7 @@
       ? options.isVisible
       : defaultIsVisible;
     const semanticRoots = collectMatches(base, ADAPTIVE_UI_ROOT_SELECTOR)
-      .filter(root => isVisible(root));
+      .filter(root => isVisibleAdaptiveUiRoot(root, { ...options, isVisible, limits }));
     const inferredCounts = new Map();
     const controls = collectMatches(base, INTERACTIVE_CONTROL_SELECTOR);
     let examinedControls = 0;
@@ -380,7 +399,9 @@
     const isVisible = typeof options.isVisible === 'function'
       ? options.isVisible
       : defaultIsVisible;
-    if (!isVisible(normalized)) return null;
+    if (!isVisibleAdaptiveUiRoot(normalized, { ...options, isVisible, limits })) {
+      return null;
+    }
 
     let current = normalized;
     for (let depth = 0;
@@ -390,7 +411,8 @@
         && depth <= limits.ancestorDepth;
       depth++, current = getComposedParentElement(current)
     ) {
-      if (current.matches?.(ADAPTIVE_UI_ROOT_SELECTOR) && isVisible(current)) {
+      if (current.matches?.(ADAPTIVE_UI_ROOT_SELECTOR)
+          && isVisibleAdaptiveUiRoot(current, { ...options, isVisible, limits })) {
         return current;
       }
       if (isNavigationCollection(current, { ...options, isVisible, limits })) {
@@ -406,6 +428,7 @@
     NAVIGATION_COLLECTION_EXCLUSION_SELECTOR,
     getComposedParentElement,
     hasVisibleArea,
+    isVisibleAdaptiveUiRoot,
     isAdaptiveUiRoot,
     isWithinAdaptiveUiScope,
     isAdaptiveUiLabel,

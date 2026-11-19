@@ -3486,6 +3486,162 @@
         }
       });
 
+      test('dynamic attribute-only chrome stays interactive and translates monolingually', async () => {
+        resetContentState();
+        const originalSendMessage = chrome.runtime.sendMessage;
+        const requests = [];
+        const waitFor = async (predicate, timeout = 2000) => {
+          const deadline = performance.now() + timeout;
+          while (performance.now() < deadline) {
+            if (predicate()) return true;
+            await sleep(20);
+          }
+          return predicate();
+        };
+
+        document.title = 'Dynamic attribute-only chrome';
+        document.body.innerHTML = `
+          <div id="attribute-observer-shell"
+               style="display:flex;align-items:flex-start;width:980px;height:700px">
+            <main id="attribute-observer-feed"
+                  style="display:block;width:680px;height:680px">
+              <article>
+                <div id="attribute-observer-initial-post" lang="en" dir="auto">
+                  Initial post content keeps the reading root active.
+                </div>
+              </article>
+            </main>
+          </div>
+        `;
+        state.config = {
+          showOriginal: true,
+          autoDetect: false,
+          targetLang: 'zh-CN',
+          maxConcurrent: 4,
+          translationScope: 'smart'
+        };
+        state.scope = 'smart';
+        state.isActive = true;
+        state.shouldStop = false;
+        state.lifecycle.start();
+        state.scanContext = pageScanner.createScanContext({
+          scope: 'smart',
+          site: 'x'
+        });
+        chrome.runtime.sendMessage = message => {
+          if (message.action === 'abortRequest') {
+            return Promise.resolve({ success: true });
+          }
+          if (message.action !== 'translate') {
+            return Promise.resolve({ translations: [] });
+          }
+          requests.push(message);
+          return Promise.resolve({
+            translations: message.texts.map(pseudoTranslate)
+          });
+        };
+
+        try {
+          startMutationObserver();
+          collectViewportBlocks().forEach(block => addToQueue(block));
+          await processQueue();
+          assert(await waitFor(() => isTranslationPipelineIdle()),
+            'initial post translation did not settle');
+
+          const toolbar = document.createElement('div');
+          toolbar.id = 'attribute-observer-toolbar';
+          toolbar.setAttribute(
+            'style',
+            'display:flex;width:980px;height:44px;overflow-x:auto'
+          );
+          const definitions = [
+            ['back', 'Back'],
+            ['more', 'More actions'],
+            ['settings', 'Settings']
+          ];
+          const controls = new Map();
+          for (const [suffix, label] of definitions) {
+            const control = document.createElement('button');
+            control.id = `attribute-observer-${suffix}`;
+            control.type = 'button';
+            control.setAttribute('aria-label', label);
+            control.setAttribute(
+              'style',
+              'display:flex;width:180px;height:38px'
+            );
+            control.innerHTML = `
+              <svg aria-hidden="true"><path d="M0 0h12v12z"></path></svg>
+            `;
+            const stateForControl = { label, clicks: 0, href: null };
+            control.addEventListener('click', () => stateForControl.clicks++);
+            controls.set(suffix, { control, stateForControl });
+            toolbar.append(control);
+          }
+          document.querySelector('#attribute-observer-shell').prepend(toolbar);
+
+          const feed = document.querySelector('#attribute-observer-feed');
+          const latePost = document.createElement('article');
+          latePost.id = 'attribute-observer-late-post';
+          latePost.innerHTML = `
+            <div id="attribute-observer-late-post-text" lang="en" dir="auto">
+              A newly rendered post is translated after scrolling deeper.
+            </div>
+          `;
+          feed.append(latePost);
+
+          assert(await waitFor(() => definitions.every(([suffix]) => {
+            const { control } = controls.get(suffix);
+            return control.querySelector(
+              `${window.OITContentUnitizer.ATTRIBUTE_LABEL_HOST_SELECTOR} > .oit-translation`
+            );
+          })), 'dynamic attribute-only chrome never rendered translations');
+
+          const requestedText = requests.flatMap(request => request.texts).join(' ');
+          for (const [suffix, label] of definitions) {
+            const { control, stateForControl } = controls.get(suffix);
+            const host = control.querySelector(
+              window.OITContentUnitizer.ATTRIBUTE_LABEL_HOST_SELECTOR
+            );
+            const original = host?.querySelector(':scope > .oit-original');
+            const translation = host?.querySelector(':scope > .oit-translation');
+            assert(host && translation,
+              `attribute-only translation host is missing for ${suffix}`);
+            assert(original?.classList.contains('oit-original-hidden'),
+              `attribute-only source remained visible for ${suffix}`);
+            assert(translation.textContent.includes('译'),
+              `attribute-only translation did not render for ${suffix}`);
+            assert(document.querySelector(`#${control.id}`) === control,
+              `translation replaced the attribute control ${suffix}`);
+            assert(control.getAttribute('href') === stateForControl.href,
+              `translation changed attribute control href for ${suffix}`);
+            control.click();
+            assert(stateForControl.clicks === 1,
+              `translation removed the attribute control listener for ${suffix}`);
+            assert(requestedText.includes(label),
+              `provider request omitted attribute label ${label}`);
+          }
+
+          assert(await waitFor(() => document.querySelector(
+            '#attribute-observer-late-post-text > .oit-translation'
+          )), 'dynamic post content did not translate through the observer');
+          assert(await waitFor(() => isTranslationPipelineIdle()),
+            'dynamic attribute translation pipeline did not return to idle');
+
+          const requestCount = requests.length;
+          await sleep(CONFIG.MUTATION_DEBOUNCE + 250);
+          assert(requests.length === requestCount,
+            'attribute host DOM mutations triggered duplicate translation requests');
+          assert(state.dynamicDiagnostics.ignoredMutations > 0,
+            'attribute host DOM mutations were not recognized as extension-owned');
+          assert(settleTranslationPipeline(),
+            'attribute host mutations left the page translation unsettled');
+        } finally {
+          chrome.runtime.sendMessage = originalSendMessage;
+          removeAllTranslations();
+          state.fullReset();
+        }
+      });
+
       test('adjacent prose batches together while adjacent controls stay independent', () => {
         resetContentState();
         document.body.innerHTML = `

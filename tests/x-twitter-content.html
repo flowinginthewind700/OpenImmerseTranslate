@@ -2197,6 +2197,123 @@
         }
       });
 
+      test('landmark-free authenticated X shell translates persistent chrome and late feed content', () => {
+        const fixture = document.createElement('div');
+        fixture.id = 'x-landmark-free-fixture';
+        fixture.innerHTML = `
+          <div style="display:flex;align-items:flex-start;width:1100px;height:720px">
+            <div id="x-landmark-free-topbar"
+                 style="display:flex;width:1100px;height:46px;overflow-x:auto">
+              <button id="x-landmark-free-back" type="button" aria-label="Back"
+                      style="display:flex;width:120px;height:38px">
+                <svg aria-hidden="true"><path d="M0 0h12v12z"></path></svg>
+              </button>
+              <button id="x-landmark-free-more" type="button" aria-label="More"
+                      style="display:flex;width:120px;height:38px">
+                <svg aria-hidden="true"><path d="M0 0h12v12z"></path></svg>
+              </button>
+              <button id="x-landmark-free-settings" type="button" aria-label="Settings"
+                      style="display:flex;width:120px;height:38px">
+                <svg aria-hidden="true"><path d="M0 0h12v12z"></path></svg>
+              </button>
+            </div>
+            <div id="x-landmark-free-rail"
+                 style="display:block;width:230px;height:1200px;overflow-y:auto">
+              <a id="x-landmark-free-home" href="/home" aria-label="Home"
+                 style="display:flex;width:210px;height:40px">
+                <svg aria-hidden="true"><path d="M0 0h12v12z"></path></svg>
+              </a>
+              <a id="x-landmark-free-explore" href="/explore" aria-label="Explore"
+                 style="display:flex;width:210px;height:40px">
+                <svg aria-hidden="true"><path d="M0 0h12v12z"></path></svg>
+              </a>
+              <a id="x-landmark-free-notifications" href="/notifications"
+                 aria-label="Notifications" style="display:flex;width:210px;height:40px">
+                <svg aria-hidden="true"><path d="M0 0h12v12z"></path></svg>
+              </a>
+              <a id="x-landmark-free-messages" href="/messages" aria-label="Messages"
+                 style="display:flex;width:210px;height:40px">
+                <svg aria-hidden="true"><path d="M0 0h12v12z"></path></svg>
+              </a>
+            </div>
+            <div id="x-landmark-free-feed"
+                 style="display:block;width:620px;height:680px;overflow-y:auto">
+              <article id="x-landmark-free-post">
+                <div id="x-landmark-free-post-text" lang="en" dir="auto">
+                  A visible post remains readable without stable X test identifiers.
+                </div>
+              </article>
+            </div>
+            <div id="x-landmark-free-sidebar"
+                 style="display:block;width:260px;height:500px">
+              <div id="x-landmark-free-trend-title" lang="en" dir="ltr">
+                Technology trends
+              </div>
+              <div id="x-landmark-free-trend-copy" lang="en" dir="auto">
+                Browser translation updates arrive as the right column renders.
+              </div>
+            </div>
+          </div>
+        `;
+        document.body.append(fixture);
+
+        try {
+          const context = scanner.createScanContext({ scope: 'smart', site: 'x' });
+          const initial = scanner.collectPageCandidates('smart', {
+            context,
+            site: 'x',
+            root: fixture
+          });
+          const initialText = initial.map(candidate => candidate.text).join(' ');
+
+          for (const label of [
+            'Back', 'More', 'Settings', 'Home', 'Explore', 'Notifications',
+            'Messages', 'visible post', 'Technology trends', 'right column'
+          ]) {
+            assert(initialText.includes(label),
+              `landmark-free X scan omitted ${label}: ${initialText}`);
+          }
+
+          const feed = document.querySelector('#x-landmark-free-feed');
+          const latePost = document.createElement('article');
+          latePost.id = 'x-landmark-free-late-post';
+          latePost.innerHTML = `
+            <div id="x-landmark-free-late-post-text" lang="en" dir="auto">
+              A newly virtualized post appears after the user scrolls.
+            </div>
+          `;
+          feed.append(latePost);
+          const lateCandidates = scanner.collectDynamicCandidates(
+            latePost,
+            'smart',
+            { context, site: 'x' }
+          );
+          const latePostCandidate = lateCandidates.find(candidate => (
+            candidate.element.id === 'x-landmark-free-late-post-text'
+          ));
+          assert(latePostCandidate?.siteRole === 'post-body',
+            'late landmark-free post was not translated as an independent post body');
+
+          const sidebar = document.querySelector('#x-landmark-free-sidebar');
+          const lateTrend = document.createElement('div');
+          lateTrend.id = 'x-landmark-free-late-trend';
+          lateTrend.setAttribute('lang', 'en');
+          lateTrend.setAttribute('dir', 'auto');
+          lateTrend.textContent = 'A late right-column story appears after scrolling.';
+          sidebar.append(lateTrend);
+          const sidebarCandidates = scanner.collectDynamicCandidates(
+            lateTrend,
+            'smart',
+            { context, site: 'x' }
+          );
+          assert(sidebarCandidates.some(candidate => (
+            candidate.element.id === 'x-landmark-free-late-trend'
+          )), 'late landmark-free right-column content was omitted');
+        } finally {
+          fixture.remove();
+        }
+      });
+
       const failures = [];
       for (const item of tests) {
         try {

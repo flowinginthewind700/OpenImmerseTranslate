@@ -864,6 +864,78 @@
           `dynamic virtualized post was omitted: ${dynamicPost.join(', ')}`);
       });
 
+      test('attribute-only navigation is not starved by a large feed and supports dynamic inserts', () => {
+        const paragraphs = Array.from({ length: 36 }, (_, index) => (
+          `<p id="attribute-feed-${index}">
+             Timeline post ${index} contains enough readable prose to exhaust a small page budget.
+           </p>`
+        )).join('');
+        document.body.innerHTML = `
+          <div id="attribute-shell" style="display:flex;width:1000px;height:700px">
+            <div id="attribute-toolbar"
+                 style="display:flex;width:1000px;height:44px;overflow-x:auto">
+              <button id="attribute-back-control" type="button" aria-label="Back"
+                      style="display:flex;width:150px;height:36px">
+                <svg aria-hidden="true"><path d="M0 0h12v12z"></path></svg>
+              </button>
+              <button id="attribute-more-control" type="button" aria-label="More actions"
+                      style="display:flex;width:150px;height:36px">
+                <svg aria-hidden="true"><path d="M0 0h12v12z"></path></svg>
+              </button>
+              <button id="attribute-share-control" type="button" aria-label="Share post"
+                      style="display:flex;width:150px;height:36px">
+                <svg aria-hidden="true"><path d="M0 0h12v12z"></path></svg>
+              </button>
+            </div>
+            <main id="attribute-main"
+                  style="display:block;width:700px;height:640px">
+              <article>${paragraphs}</article>
+            </main>
+          </div>
+        `;
+
+        const context = scanner.createScanContext({
+          scope: 'smart',
+          site: 'x',
+          pageBudget: 10
+        });
+        const toolbar = document.querySelector('#attribute-toolbar');
+        const initial = scanner.collectPageCandidates('smart', {
+          context,
+          site: 'x',
+          root: document.querySelector('#attribute-shell')
+        });
+        const initialHosts = initial
+          .map(candidate => candidate.element)
+          .filter(element => element.matches?.(window.OITContentUnitizer.ATTRIBUTE_LABEL_HOST_SELECTOR));
+        const initialText = initialHosts.map(host => host.textContent).join(' ');
+        for (const label of ['Back', 'More actions', 'Share post']) {
+          assert(initialText.includes(label),
+            `attribute-only toolbar label was starved by feed content: ${label}`);
+        }
+
+        const lateControl = document.createElement('button');
+        lateControl.id = 'attribute-settings-control';
+        lateControl.type = 'button';
+        lateControl.setAttribute('aria-label', 'Settings');
+        lateControl.innerHTML = '<svg aria-hidden="true"><path d="M0 0h12v12z"></path></svg>';
+        lateControl.setAttribute(
+          'style',
+          'display:flex;width:150px;height:36px'
+        );
+        toolbar.append(lateControl);
+
+        const dynamic = scanner.collectDynamicCandidates(
+          lateControl,
+          'smart',
+          { context, site: 'x' }
+        );
+        assert(dynamic.some(candidate => (
+          candidate.element.matches?.(window.OITContentUnitizer.ATTRIBUTE_LABEL_HOST_SELECTOR)
+            && candidate.element.textContent.includes('Settings')
+        )), 'dynamic attribute-only navigation label was not discovered');
+      });
+
       test('plain text documents are recognized without opening ordinary HTML pre blocks', () => {
         document.body.innerHTML = '<pre id="plain-document">Plain text page content that should be translated.</pre>';
         assert(scanner.isPlainTextDocument(document), 'body-only pre document was not recognized as plain text');
