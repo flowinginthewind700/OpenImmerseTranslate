@@ -597,6 +597,31 @@
         assert(clickCount === 1, 'scanning removed or detached the control click listener');
       });
 
+      test('generic language metadata does not impersonate the X site profile', () => {
+        document.body.innerHTML = `
+          <main id="generic-language-main">
+            <article>
+              <div id="generic-language-copy" lang="en" dir="auto">
+                Language metadata is common on ordinary multilingual websites.
+              </div>
+            </article>
+          </main>
+        `;
+
+        const site = window.OITSiteAdapters.detectSite(document, {
+          hostname: 'example.com'
+        });
+        const result = scan('smart');
+        const candidate = result.candidates.find(item => (
+          item.element.id === 'generic-language-copy'
+        ));
+
+        assert(site === 'generic',
+          `generic language markup was detected as the ${site} site profile`);
+        assert(candidate?.siteRole !== 'post-body',
+          'generic language markup received X post-body semantics');
+      });
+
       test('smart scope discovers visible non-semantic navigation rails but not article action links', () => {
         document.body.innerHTML = `
           <div id="rail-app">

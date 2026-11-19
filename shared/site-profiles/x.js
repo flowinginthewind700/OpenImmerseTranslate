@@ -26,12 +26,14 @@
   const POST_CONTAINER = ':is(article, [role="article"])';
   const POST_TEXT_SELECTOR = [
     `${POST_CONTAINER} [data-testid="tweetText"]`,
-    `${POST_CONTAINER} div[dir="auto"].whitespace-pre-wrap`
+    `${POST_CONTAINER} div[dir="auto"].whitespace-pre-wrap`,
+    `${POST_CONTAINER} div[lang][dir]`
   ].join(',');
   const SURFACE_SELECTOR = [
     `${POST_CONTAINER} [data-post-avatar="true"]`,
     `${POST_CONTAINER} [data-engagement-action]`,
-    POST_TEXT_SELECTOR
+    `${POST_CONTAINER} [data-testid="tweetText"]`,
+    `${POST_CONTAINER} div[dir="auto"].whitespace-pre-wrap`
   ].join(',');
   const METADATA_SELECTOR = [
     '[data-testid="User-Name"]',
@@ -51,8 +53,11 @@
   const SIDENAV_ROOT_SELECTOR = '[data-testid="SideNav"]';
   const SUPPLEMENTAL_ROOT_SELECTOR = [
     '[data-testid="sidebarColumn"]',
-    'aside[aria-label*="Timeline: Trending"]'
+    'aside[aria-label*="Timeline: Trending"]',
+    'aside[aria-label*="What is happening" i]',
+    '[role="complementary"][aria-label*="What is happening" i]'
   ].join(',');
+  const SUPPLEMENTAL_CANDIDATE_SELECTOR = 'aside, [role="complementary"]';
   const SUPPLEMENTAL_TREND_SELECTOR = '[data-testid="trend"]';
   const USER_DESCRIPTION_SELECTOR = '[data-testid="UserDescription"]';
   const USER_CELL_SELECTOR = '[data-testid="UserCell"]';
@@ -376,6 +381,38 @@
     )));
   }
 
+  function hasSupplementalContentEvidence(root) {
+    if (!root?.querySelectorAll || root.closest?.(POST_CONTAINER)) {
+      return false;
+    }
+    const text = String(root.textContent || '').replace(/\s+/g, ' ').trim();
+    if (text.length < 2) return false;
+    const label = String(root.getAttribute?.('aria-label') || '').trim();
+    const hasHeading = Boolean(root.querySelector(
+      'h1, h2, h3, h4, h5, h6, [role="heading"]'
+    ));
+    const hasRichText = Boolean(root.querySelector(SUPPLEMENTAL_RICH_TEXT_SELECTOR));
+    const hasKnownCard = Boolean(root.querySelector([
+      SUPPLEMENTAL_TREND_SELECTOR,
+      USER_DESCRIPTION_SELECTOR,
+      USER_CELL_SELECTOR
+    ].join(',')));
+    return (Boolean(label) && (hasHeading || hasRichText || hasKnownCard))
+      || (hasHeading && (hasRichText || hasKnownCard));
+  }
+
+  function isSupplementalRootCandidate(root) {
+    if (!root?.matches) return false;
+    if (root.matches(SUPPLEMENTAL_ROOT_SELECTOR)) return true;
+    if (!root.matches(SUPPLEMENTAL_CANDIDATE_SELECTOR)) return false;
+    return hasSupplementalContentEvidence(root);
+  }
+
+  function findSupplementalEvidenceRoots(base) {
+    return collectMatches(base, SUPPLEMENTAL_CANDIDATE_SELECTOR)
+      .filter(isSupplementalRootCandidate);
+  }
+
   function diagnoseAdaptiveRoots(base = globalThis.document?.body) {
     if (!base?.querySelectorAll) return [];
     const candidates = [
@@ -459,7 +496,10 @@
       ? options.isVisible
       : element => Boolean(element?.isConnected);
     const limit = Math.max(1, Number(options.limit) || SUPPLEMENTAL_ROOT_LIMIT);
-    const roots = collectMatches(base, SUPPLEMENTAL_ROOT_SELECTOR)
+    const roots = [
+      ...collectMatches(base, SUPPLEMENTAL_ROOT_SELECTOR),
+      ...findSupplementalEvidenceRoots(base)
+    ]
       .filter(root => isVisible(root))
       .slice(0, limit);
     const containingRoot = getSupplementalRoot(base, options);
@@ -471,13 +511,23 @@
     const normalized = element?.nodeType === 1 ? element : element?.parentElement;
     if (!normalized?.matches || normalized.closest?.(POST_CONTAINER)) return null;
 
-    const sidebar = normalized.closest?.('[data-testid="sidebarColumn"]');
-    const fallbackAside = normalized.closest?.(
-      'aside[aria-label*="Timeline: Trending"]'
-    );
-    let root = sidebar || fallbackAside || null;
+    const sidebar = normalized.closest?.(SUPPLEMENTAL_ROOT_SELECTOR);
+    let root = sidebar || null;
+    if (!root) {
+      let current = normalized;
+      while (current && !current.matches?.(POST_CONTAINER)) {
+        if (isSupplementalRootCandidate(current)) {
+          root = current;
+          break;
+        }
+        current = current.parentElement;
+      }
+    }
     if (!root && normalized.querySelectorAll) {
-      root = Array.from(normalized.querySelectorAll(SUPPLEMENTAL_ROOT_SELECTOR))
+      root = [
+        ...collectMatches(normalized, SUPPLEMENTAL_ROOT_SELECTOR),
+        ...findSupplementalEvidenceRoots(normalized)
+      ]
         .find(candidate => candidate.isConnected) || null;
     }
     if (!root) return null;

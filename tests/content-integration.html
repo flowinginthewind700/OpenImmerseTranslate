@@ -466,6 +466,133 @@
         }
       });
 
+      test('observer translates late identifier-free X posts and sidebar cards', async () => {
+        resetContentState();
+        hideFAB();
+        const originalSendMessage = chrome.runtime.sendMessage;
+        const waitFor = async (predicate, timeout = 2500) => {
+          const deadline = performance.now() + timeout;
+          while (performance.now() < deadline) {
+            if (predicate()) return true;
+            await sleep(20);
+          }
+          return predicate();
+        };
+
+        document.title = 'Identifier-free X dynamic content';
+        document.body.innerHTML = `
+          <main role="main"
+                style="display:flex;gap:20px;align-items:flex-start;
+                       width:960px;height:620px">
+            <section id="x-semantic-center"
+                     style="display:block;width:600px;min-height:520px">
+              <article id="x-semantic-post">
+                <div id="x-semantic-existing-body"
+                     lang="en"
+                     dir="auto"
+                     style="display:block;width:580px;min-height:48px">
+                  Existing timeline content establishes the smart reading root.
+                </div>
+                <div id="x-semantic-late-body-shell"
+                     style="display:block;width:580px"></div>
+              </article>
+            </section>
+            <div id="x-semantic-right"
+                 style="display:block;width:320px;min-height:520px">
+              <aside aria-label="What is happening"
+                     style="display:block;width:300px;min-height:480px">
+                <h2 id="x-semantic-sidebar-heading">What is happening</h2>
+                <div id="x-semantic-late-sidebar-shell"
+                     style="display:block;width:280px"></div>
+              </aside>
+            </div>
+          </main>
+        `;
+        state.config = {
+          showOriginal: true,
+          autoDetect: false,
+          targetLang: 'zh-CN',
+          maxConcurrent: 4,
+          translationScope: 'smart'
+        };
+        state.scope = 'smart';
+        state.isActive = true;
+        state.shouldStop = false;
+        state.lifecycle.start();
+        state.scanContext = pageScanner.createScanContext({
+          scope: 'smart',
+          site: 'x'
+        });
+        chrome.runtime.sendMessage = message => {
+          if (message.action === 'abortRequest') {
+            return Promise.resolve({ success: true });
+          }
+          if (message.action !== 'translate') {
+            return Promise.resolve({ translations: [] });
+          }
+          return Promise.resolve({
+            translations: message.texts.map(pseudoTranslate)
+          });
+        };
+
+        try {
+          startMutationObserver();
+          collectViewportBlocks().forEach(block => addToQueue(block));
+          await processQueue();
+          assert(await waitFor(() => (
+            translationRecords.has(document.querySelector('#x-semantic-existing-body'))
+            && translationRecords.has(document.querySelector('#x-semantic-sidebar-heading'))
+          )), 'initial identifier-free X content was not translated');
+          assert(await waitFor(() => isTranslationPipelineIdle()),
+            'initial identifier-free X translation did not return to idle');
+
+          document.querySelector('#x-semantic-late-body-shell').innerHTML = `
+            <div id="x-semantic-late-body"
+                 lang="en"
+                 dir="auto"
+                 style="display:block;width:580px;min-height:48px">
+              A virtualized post body arrived without a tweet text test id.
+            </div>
+          `;
+          document.querySelector('#x-semantic-late-sidebar-shell').innerHTML = `
+            <div id="x-semantic-late-trend"
+                 lang="en"
+                 dir="ltr"
+                 style="display:block;width:280px;min-height:48px">
+              A late right-column trend must translate while the reader scrolls.
+            </div>
+            <div id="x-semantic-late-count">8,421 posts</div>
+          `;
+
+          assert(await waitFor(() => (
+            translationRecords.has(document.querySelector('#x-semantic-late-body'))
+            && translationRecords.has(document.querySelector('#x-semantic-late-trend'))
+          )), 'late identifier-free X content did not reach the observer pipeline: '
+            + JSON.stringify(state.dynamicDiagnostics));
+          assert(document.querySelector('#x-semantic-late-body > .oit-translation'),
+            'late X post body translation was not rendered');
+          assert(document.querySelector('#x-semantic-late-trend > .oit-translation'),
+            'late X sidebar translation was not rendered');
+          assert(!translationRecords.has(
+            document.querySelector('#x-semantic-late-count')
+          ), 'late X sidebar count was treated as translatable prose');
+          assert(state.dynamicDiagnostics.roots >= 2
+              && state.dynamicDiagnostics.candidates >= 2
+              && state.dynamicDiagnostics.blocks >= 2,
+          'late identifier-free X content bypassed the dynamic pipeline: '
+            + JSON.stringify(state.dynamicDiagnostics));
+          assert(await waitFor(() => isTranslationPipelineIdle()),
+            'late identifier-free X translation did not return to idle');
+          assert(state.isActive,
+            'late identifier-free X translation stopped future observation');
+        } finally {
+          chrome.runtime.sendMessage = originalSendMessage;
+          removeAllTranslations();
+          hideFAB();
+          state.fullReset();
+        }
+      });
+
       test('scroll events from class-based SPA containers trigger a rescan', async () => {
         resetContentState();
         document.body.innerHTML = `

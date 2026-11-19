@@ -1957,6 +1957,246 @@
         }
       });
 
+      test('authenticated X layout without stable testids keeps semantic content roles', () => {
+        const fixture = document.createElement('div');
+        fixture.id = 'x-authenticated-semantic-fixture';
+        fixture.innerHTML = `
+          <main id="x-authenticated-layout"
+                role="main"
+                style="display:flex;gap:20px;align-items:flex-start;width:1100px">
+            <div id="x-authenticated-left-rail"
+                 style="display:block;width:230px;height:220px;overflow:hidden">
+              <a href="/home" style="display:flex;width:210px;height:38px">
+                <span><span id="x-authenticated-home-label">Home</span></span>
+              </a>
+              <a href="/alice" style="display:flex;width:210px;height:38px">
+                <span><span id="x-authenticated-profile-label">Profile</span></span>
+              </a>
+              <a href="/settings" style="display:flex;width:210px;height:38px">
+                <span><span id="x-authenticated-settings-label">Settings</span></span>
+              </a>
+              <a href="/alice/more" style="display:flex;width:210px;height:38px">
+                <span><span id="x-authenticated-more-label">More</span></span>
+              </a>
+            </div>
+            <section id="x-authenticated-center"
+                     style="display:block;width:600px;min-height:420px">
+              <article id="x-authenticated-post">
+                <div id="x-authenticated-account">
+                  <span>Alice Example</span>
+                  <span>@alice</span>
+                </div>
+                <time datetime="2026-11-19T00:00:00Z">2h</time>
+                <div id="x-authenticated-post-body"
+                     lang="en"
+                     dir="auto">
+                  <span>
+                    Authenticated posts still translate when X omits stable text testids.
+                  </span>
+                </div>
+                <div id="x-authenticated-engagement">
+                  <span>12 replies</span>
+                  <span>48 likes</span>
+                </div>
+              </article>
+            </section>
+            <div id="x-authenticated-right-column"
+                 style="display:block;width:320px;min-height:420px">
+              <aside aria-label="What is happening"
+                     style="display:block;width:300px;min-height:380px">
+                <h2 id="x-authenticated-trends-heading">What is happening</h2>
+                <div id="x-authenticated-trend-title" lang="en" dir="ltr">
+                  Browser translation
+                </div>
+                <div id="x-authenticated-trend-copy" lang="en" dir="auto">
+                  Developers are making multilingual reading immediate.
+                </div>
+                <div id="x-authenticated-trend-count">12.4K posts</div>
+                <div id="x-authenticated-user-cell">
+                  <span>Carol Example</span>
+                  <span>@carol</span>
+                  <div id="x-authenticated-user-bio" lang="en" dir="auto">
+                    Building accessible tools for readers around the world.
+                  </div>
+                  <button type="button">
+                    <span id="x-authenticated-follow-label">Follow</span>
+                  </button>
+                </div>
+              </aside>
+            </div>
+          </main>
+        `;
+        document.body.append(fixture);
+
+        try {
+          const context = scanner.createScanContext({ scope: 'smart', site: 'x' });
+          const byId = new Map(scanner.collectPageCandidates('smart', {
+            context,
+            site: 'x'
+          }).map(candidate => [candidate.element.id, candidate]));
+
+          assert(byId.get('x-authenticated-post-body')?.siteRole === 'post-body',
+            'identifier-free authenticated post body lost post semantics');
+          for (const id of [
+            'x-authenticated-home-label',
+            'x-authenticated-profile-label',
+            'x-authenticated-settings-label',
+            'x-authenticated-more-label'
+          ]) {
+            assert(byId.get(id)?.siteRole === 'navigation-label',
+              `authenticated main-contained navigation lost ${id}`);
+          }
+          for (const id of [
+            'x-authenticated-trends-heading',
+            'x-authenticated-trend-title',
+            'x-authenticated-trend-copy',
+            'x-authenticated-user-bio'
+          ]) {
+            assert(byId.get(id)?.siteRole === 'supplemental-content',
+              `identifier-free right column lost supplemental content ${id}`);
+          }
+          assert(!byId.has('x-authenticated-trend-count'),
+            'right-column status count was translated as prose');
+          assert(!byId.has('x-authenticated-follow-label'),
+            'right-column action label was translated as supplemental prose');
+        } finally {
+          fixture.remove();
+        }
+      });
+
+      test('late authenticated X post text and sidebar cards retain their semantic roles', () => {
+        const fixture = document.createElement('div');
+        fixture.id = 'x-late-semantic-fixture';
+        fixture.innerHTML = `
+          <main id="x-late-semantic-layout"
+                role="main"
+                style="display:flex;gap:20px;align-items:flex-start;width:980px">
+            <section id="x-late-semantic-center"
+                     style="display:block;width:600px;min-height:360px">
+              <article id="x-late-semantic-post">
+                <div id="x-late-post-body-shell"></div>
+              </article>
+            </section>
+            <div id="x-late-semantic-right"
+                 style="display:block;width:320px;min-height:360px">
+              <aside id="x-late-semantic-aside"
+                     aria-label="What is happening"
+                     style="display:block;width:300px;min-height:320px">
+                <h2 id="x-late-sidebar-heading-without-testid">What is happening</h2>
+              </aside>
+            </div>
+          </main>
+        `;
+        document.body.append(fixture);
+
+        try {
+          const context = scanner.createScanContext({ scope: 'smart', site: 'x' });
+          scanner.collectPageCandidates('smart', { context, site: 'x' });
+
+          const bodyShell = document.querySelector('#x-late-post-body-shell');
+          bodyShell.innerHTML = `
+            <div id="x-late-post-body-without-testid" lang="en" dir="auto">
+              <span>A post body can arrive after its article shell.</span>
+            </div>
+          `;
+          const postCandidates = scanner.collectDynamicCandidates(bodyShell, 'smart', {
+            context,
+            site: 'x'
+          });
+          const post = postCandidates.find(candidate => (
+            candidate.element.id === 'x-late-post-body-without-testid'
+          ));
+          assert(post?.siteRole === 'post-body',
+            'late identifier-free post body did not retain post semantics');
+
+          const aside = document.querySelector('#x-late-semantic-aside');
+          aside.insertAdjacentHTML('beforeend', `
+            <div id="x-late-trend-title-without-testid" lang="en" dir="ltr">
+              A late right-column trend
+            </div>
+            <div id="x-late-trend-copy-without-testid" lang="en" dir="auto">
+              Newly rendered sidebar copy must translate without a page refresh.
+            </div>
+            <div id="x-late-trend-count-without-testid">8,421 posts</div>
+          `);
+          const sidebarCandidates = scanner.collectDynamicCandidates(
+            document.querySelector('#x-late-trend-title-without-testid'),
+            'smart',
+            { context, site: 'x' }
+          );
+          const sidebar = new Map(sidebarCandidates.map(candidate => [
+            candidate.element.id,
+            candidate
+          ]));
+          assert(sidebar.get('x-late-trend-title-without-testid')?.siteRole
+              === 'supplemental-content',
+          'late right-column title lost supplemental semantics');
+          assert(sidebar.get('x-late-trend-copy-without-testid')?.siteRole
+              === 'supplemental-content',
+          'late right-column copy lost supplemental semantics');
+          assert(!sidebar.has('x-late-trend-count-without-testid'),
+            'late right-column count was translated as prose');
+        } finally {
+          fixture.remove();
+        }
+      });
+
+      test('late authenticated X navigation items rescan their main-contained rail', () => {
+        const fixture = document.createElement('div');
+        fixture.id = 'x-late-navigation-fixture';
+        fixture.innerHTML = `
+          <main role="main" style="display:block;width:900px;min-height:260px">
+            <div id="x-late-navigation-rail"
+                 style="display:block;width:230px;height:190px;overflow:hidden">
+              <a href="/home" style="display:flex;width:210px;height:38px">
+                <span><span id="x-late-navigation-home-label">Home</span></span>
+              </a>
+              <a href="/alice" style="display:flex;width:210px;height:38px">
+                <span><span id="x-late-navigation-profile-label">Profile</span></span>
+              </a>
+            </div>
+            <article>
+              <div data-testid="tweetText" lang="en" dir="auto">
+                Timeline content establishes the authenticated reading root.
+              </div>
+            </article>
+          </main>
+        `;
+        document.body.append(fixture);
+
+        try {
+          const context = scanner.createScanContext({ scope: 'smart', site: 'x' });
+          scanner.collectPageCandidates('smart', { context, site: 'x' });
+
+          const rail = document.querySelector('#x-late-navigation-rail');
+          rail.insertAdjacentHTML('beforeend', `
+            <a href="/settings" style="display:flex;width:210px;height:38px">
+              <span><span id="x-late-navigation-settings-label">Settings</span></span>
+            </a>
+            <a href="/alice/more" style="display:flex;width:210px;height:38px">
+              <span><span id="x-late-navigation-more-label">More</span></span>
+            </a>
+          `);
+          const byId = new Map(scanner.collectDynamicCandidates(
+            rail,
+            'smart',
+            { context, site: 'x' }
+          ).map(candidate => [candidate.element.id, candidate]));
+
+          for (const id of [
+            'x-late-navigation-home-label',
+            'x-late-navigation-profile-label',
+            'x-late-navigation-settings-label',
+            'x-late-navigation-more-label'
+          ]) {
+            assert(byId.get(id)?.siteRole === 'navigation-label',
+              `late authenticated navigation item lost ${id}`);
+          }
+        } finally {
+          fixture.remove();
+        }
+      });
+
       const failures = [];
       for (const item of tests) {
         try {
