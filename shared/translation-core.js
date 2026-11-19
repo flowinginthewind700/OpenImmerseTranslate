@@ -45,6 +45,10 @@
     'a', 'button', 'summary', 'label', 'legend', 'th', 'td',
     '[role="button"]', '[role="link"]', '[role^="menuitem"]', '[role="tab"]'
   ].join(',');
+  const COMPACT_CONTROL_CONTEXT_SELECTOR = [
+    'a[href]', 'button', 'summary', '[role="button"]', '[role="link"]',
+    '[role^="menuitem"]', '[role="tab"]'
+  ].join(',');
   const INTERACTIVE_SELECTOR = [
     'a', 'button', 'summary', '[tabindex]', '[onclick]', '[onkeydown]',
     '[role="button"]', '[role="link"]', '[role="checkbox"]', '[role="radio"]',
@@ -66,6 +70,7 @@
     '[contenteditable="true"]', '[translate="no"]', '.notranslate',
     '[hidden]', '[aria-hidden="true"]'
   ].join(',');
+  const MAX_TEXT_FLOW_ANCESTORS = 20;
 
   const layoutSharedStyles = new WeakMap();
 
@@ -514,8 +519,15 @@
     if (node.querySelector?.('p, li, ul, ol, blockquote, table, section, article')) return false;
 
     const normalized = text.replace(/\s+/g, ' ').trim();
+    const closestControl = node.closest?.(COMPACT_CONTROL_CONTEXT_SELECTOR);
+    const controlRect = closestControl?.getBoundingClientRect?.();
+    const compactControl = controlRect
+      && controlRect.width > 0
+      && controlRect.height > 0
+      && controlRect.height <= 80;
     return node.matches?.(DIRECT_CONTROL_SELECTOR)
-      || Boolean(node.closest?.('button, summary, nav, [role="navigation"], [role="menu"], [role="toolbar"], [role="tablist"]'))
+      || Boolean(compactControl)
+      || Boolean(node.closest?.('nav, [role="navigation"], [role="menu"], [role="toolbar"], [role="tablist"]'))
       || (normalized.length <= 24 && normalized.split(' ').length <= 4);
   }
 
@@ -592,6 +604,43 @@
     return wrapper;
   }
 
+  function releaseTextFlowConstraints(layout, element, style, options = {}) {
+    if (!layout || !element?.style || !style) return;
+    const height = Number.parseFloat(style.height);
+    const maxHeight = Number.parseFloat(style.maxHeight);
+    const lineClamp = Number.parseInt(
+      style.webkitLineClamp || style.getPropertyValue('-webkit-line-clamp'),
+      10
+    );
+    const overflowX = style.overflowX || style.overflow;
+    const overflowY = style.overflowY || style.overflow;
+    const clipsX = ['hidden', 'clip'].includes(overflowX);
+    const clipsY = ['hidden', 'clip'].includes(overflowY);
+
+    if (height > 0) {
+      if (!(Number.parseFloat(style.minHeight) >= height)) {
+        setTranslationStyle(layout, element, 'min-height', style.height);
+      }
+      setTranslationStyle(layout, element, 'height', 'auto');
+    }
+    if (maxHeight > 0 || (style.maxHeight && style.maxHeight !== 'none')) {
+      setTranslationStyle(layout, element, 'max-height', 'none');
+    }
+    if (options.releaseLineClamp && lineClamp > 0) {
+      setTranslationStyle(layout, element, '-webkit-line-clamp', 'none');
+      if (/\bwebkit-box\b/.test(style.display)) {
+        setTranslationStyle(layout, element, 'display', 'block');
+      }
+    }
+    if (options.releaseOverflow && (clipsX || clipsY)) {
+      if (clipsX) setTranslationStyle(layout, element, 'overflow-x', 'visible');
+      if (clipsY) setTranslationStyle(layout, element, 'overflow-y', 'visible');
+      if (clipsX && clipsY && ['hidden', 'clip'].includes(style.overflow)) {
+        setTranslationStyle(layout, element, 'overflow', 'visible');
+      }
+    }
+  }
+
   function prepareBilingualTextFlow(layout, host, target) {
     const text = visibleLayoutText(target);
     if (!text) return;
@@ -604,10 +653,11 @@
       ? closestControl
       : null;
     let current = target;
-    for (let depth = 0; current && depth < 6; depth++, current = current.parentElement) {
+    const maxDepth = compactControl ? MAX_TEXT_FLOW_ANCESTORS : 6;
+    for (let depth = 0; current && depth < maxDepth; depth++, current = current.parentElement) {
       const withinCompactControl = compactControl
         && (current === compactControl || compactControl.contains(current));
-      if (current.matches(TEXT_FLOW_BOUNDARY_SELECTOR)
+      if ((!withinCompactControl && current.matches(TEXT_FLOW_BOUNDARY_SELECTOR))
           || current.querySelector?.(TEXT_FLOW_MEDIA_SELECTOR)
           || (visibleLayoutText(current) !== text && !withinCompactControl)) {
         break;
@@ -617,7 +667,8 @@
           || ['none', 'contents'].includes(style.display)
           || ['absolute', 'fixed'].includes(style.position)
           || style.visibility === 'hidden'
-          || ['auto', 'scroll'].includes(style.overflowY)) {
+          || ['auto', 'scroll'].includes(style.overflowX || style.overflow)
+          || ['auto', 'scroll'].includes(style.overflowY || style.overflow)) {
         break;
       }
       const height = Number.parseFloat(style.height);
@@ -625,21 +676,11 @@
       const padding = (Number.parseFloat(style.paddingTop) || 0)
         + (Number.parseFloat(style.paddingBottom) || 0);
       if (height > lineHeight * 12 + padding) break;
-      if (style.display === 'inline' || !(height > 0)) continue;
-      if (!(Number.parseFloat(style.minHeight) >= height)) {
-        setTranslationStyle(layout, current, 'min-height', style.height);
-      }
-      setTranslationStyle(layout, current, 'height', 'auto');
-      if (style.maxHeight && style.maxHeight !== 'none') {
-        setTranslationStyle(layout, current, 'max-height', 'none');
-      }
-      const lineClamp = Number.parseInt(
-        style.webkitLineClamp || style.getPropertyValue('-webkit-line-clamp'),
-        10
-      );
-      if (compactControl && lineClamp > 0) {
-        setTranslationStyle(layout, current, '-webkit-line-clamp', 'none');
-      }
+      releaseTextFlowConstraints(layout, current, style, {
+        releaseLineClamp: Boolean(withinCompactControl),
+        releaseOverflow: Boolean(withinCompactControl)
+      });
+      if (current === compactControl) break;
     }
   }
 
@@ -1014,6 +1055,10 @@
     const translationNode = doc.createElement(inline ? 'span' : 'div');
     translationNode.className = `oit-translation${inline ? ' oit-inline-translation' : ''}`;
     if (options.dark) translationNode.classList.add('oit-dark');
+    if (compact) {
+      setTranslationStyle(layout, translationNode, 'display', 'block');
+      setTranslationStyle(layout, translationNode, 'white-space', 'normal');
+    }
     translationNode.appendChild(fragment);
 
     let originalWrapper = null;

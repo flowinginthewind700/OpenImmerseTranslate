@@ -40,7 +40,7 @@
     minControls: 3,
     maxControls: 500,
     maxExaminedControls: 20000,
-    ancestorDepth: 8,
+    ancestorDepth: 12,
     maxRoots: 40,
     maxLabelLength: 120,
     maxMedianLabelLength: 48,

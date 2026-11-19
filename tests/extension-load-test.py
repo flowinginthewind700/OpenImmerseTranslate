@@ -1664,10 +1664,10 @@ def verify_x_page_translation(context, worker, extension_id, live_result=None):
                       return false;
                     }
                     let visible = {
-                      top: Math.max(0, rect.top),
-                      right: Math.min(window.innerWidth, rect.right),
-                      bottom: Math.min(window.innerHeight, rect.bottom),
-                      left: Math.max(0, rect.left)
+                      top: rect.top,
+                      right: rect.right,
+                      bottom: rect.bottom,
+                      left: rect.left
                     };
                     let current = element.parentElement;
                     while (current) {
@@ -1692,6 +1692,80 @@ def verify_x_page_translation(context, worker, extension_id, live_result=None):
                       ? host
                       : host?.querySelector?.('.oit-translation');
                     return Boolean(translation && hasVisibleArea(translation));
+                  };
+                  const describeBody = host => {
+                    const translation = host?.matches?.('.oit-translation')
+                      ? host
+                      : host?.querySelector?.('.oit-translation');
+                    const hostRect = host?.getBoundingClientRect?.();
+                    const translationRect = translation?.getBoundingClientRect?.();
+                    const clippingAncestors = [];
+                    let current = host?.parentElement;
+                    while (current && clippingAncestors.length < 12) {
+                      const style = getComputedStyle(current);
+                      const clipsX = ['hidden', 'clip'].includes(
+                        style.overflowX || style.overflow
+                      );
+                      const clipsY = ['hidden', 'clip'].includes(
+                        style.overflowY || style.overflow
+                      );
+                      if (clipsX || clipsY) {
+                        const rect = current.getBoundingClientRect();
+                        clippingAncestors.push({
+                          tag: current.tagName,
+                          testId: current.getAttribute('data-testid'),
+                          id: current.id || null,
+                          overflow: style.overflow,
+                          overflowX: style.overflowX,
+                          overflowY: style.overflowY,
+                          height: style.height,
+                          maxHeight: style.maxHeight,
+                          whiteSpace: style.whiteSpace,
+                          display: style.display,
+                          rect: {
+                            top: Math.round(rect.top),
+                            bottom: Math.round(rect.bottom),
+                            width: Math.round(rect.width),
+                            height: Math.round(rect.height)
+                          }
+                        });
+                      }
+                      current = current.parentElement;
+                    }
+                    return {
+                      text: String(host?.textContent || '')
+                        .replace(/\\s+/g, ' ')
+                        .trim()
+                        .slice(0, 120),
+                      translated: Boolean(translation),
+                      visible: hasVisibleTranslation(host),
+                      hostRect: hostRect && {
+                        top: Math.round(hostRect.top),
+                        bottom: Math.round(hostRect.bottom),
+                        width: Math.round(hostRect.width),
+                        height: Math.round(hostRect.height)
+                      },
+                      translationRect: translationRect && {
+                        top: Math.round(translationRect.top),
+                        bottom: Math.round(translationRect.bottom),
+                        width: Math.round(translationRect.width),
+                        height: Math.round(translationRect.height)
+                      },
+                      translationText: String(translation?.textContent || '')
+                        .replace(/\\s+/g, ' ')
+                        .trim()
+                        .slice(0, 120),
+                      hostStyle: host ? {
+                        display: getComputedStyle(host).display,
+                        height: getComputedStyle(host).height,
+                        maxHeight: getComputedStyle(host).maxHeight,
+                        overflow: getComputedStyle(host).overflow,
+                        overflowX: getComputedStyle(host).overflowX,
+                        overflowY: getComputedStyle(host).overflowY,
+                        whiteSpace: getComputedStyle(host).whiteSpace
+                      } : null,
+                      clippingAncestors
+                    };
                   };
                   const bodies = Array.from(document.querySelectorAll(
                     'article [lang][dir="auto"], [role="article"] [lang][dir="auto"]'
@@ -1723,7 +1797,8 @@ def verify_x_page_translation(context, worker, extension_id, live_result=None):
                     translations: document.querySelectorAll('.oit-translation').length,
                     nonBodyTranslated,
                     fabTranslating: document.querySelector('.oit-fab-btn')
-                      ?.classList.contains('translating') || false
+                      ?.classList.contains('translating') || false,
+                    bodyDetails: bodies.slice(0, 8).map(describeBody)
                   };
                 }
                 """
@@ -1789,7 +1864,8 @@ def verify_x_page_translation(context, worker, extension_id, live_result=None):
         if translated["visibleBodies"] < 3:
             failures.append(
                 f"only {translated['visibleBodies']} of {translated['bodies']} "
-                "X bodies had a visibly rendered translation"
+                "X bodies had a visibly rendered translation: "
+                f"{translated.get('bodyDetails')}"
             )
         if translated["nonBodyTranslated"]:
             failures.append(

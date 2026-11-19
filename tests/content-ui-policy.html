@@ -280,6 +280,102 @@
         ), 'button-only toolbar label was not recognized as adaptive navigation');
       });
 
+      test('mixed route and action controls share an inferred navigation cluster', () => {
+        document.body.innerHTML = `
+          <div id="mixed-route-actions"
+               style="display:flex;align-items:center;width:420px;height:48px">
+            <a id="mixed-home" href="/home"
+               style="display:block;width:120px;height:36px">
+              <span id="mixed-home-label">Home</span>
+            </a>
+            <a id="mixed-explore" href="/explore"
+               style="display:block;width:130px;height:36px">
+              <span id="mixed-explore-label">Explore</span>
+            </a>
+            <button id="mixed-compose" type="button"
+                    aria-pressed="false"
+                    style="display:block;width:140px;height:36px">
+              <span id="mixed-compose-label">Compose</span>
+            </button>
+          </div>
+          <main>
+            <article>
+              <p>The article body stays outside the route and action navigation shell.</p>
+            </article>
+          </main>
+        `;
+
+        const roots = policy.findAdaptiveUiRoots(document.body, {
+          isVisible: element => {
+            const rect = element.getBoundingClientRect();
+            return rect.width > 0 && rect.height > 0;
+          }
+        });
+        const cluster = document.querySelector('#mixed-route-actions');
+
+        assert(roots.includes(cluster),
+          'mixed route and stateful action controls were not inferred as navigation');
+        assert(policy.isAdaptiveUiLabel(
+          document.querySelector('#mixed-compose-label'),
+          roots
+        ), 'mixed route/action control label was outside adaptive UI scope');
+      });
+
+      test('deep SPA route/action clusters are discovered without opening page containers', () => {
+        const deepWrap = (id, content) => {
+          let value = content;
+          for (let depth = 0; depth < 9; depth++) {
+            value = `<div id="${id}-${depth}"
+                           style="display:block;width:100%;height:100%;overflow:hidden">${value}</div>`;
+          }
+          return value;
+        };
+        document.body.innerHTML = `
+          <main id="deep-main"
+                style="display:block;width:760px;height:520px;overflow:hidden">
+            <section id="deep-timeline"
+                     style="display:block;width:700px;height:420px;overflow:hidden">
+              <article>
+                <p>The timeline remains readable below a deeply nested application shell.</p>
+              </article>
+            </section>
+            <div id="deep-mixed-cluster"
+                 style="display:flex;align-items:center;width:420px;height:44px">
+              ${deepWrap('deep-home', `
+                <a id="deep-home-control" href="/home"
+                   style="display:block;width:120px;height:34px">Home</a>
+              `)}
+              ${deepWrap('deep-explore', `
+                <a id="deep-explore-control" href="/explore"
+                   style="display:block;width:130px;height:34px">Explore</a>
+              `)}
+              ${deepWrap('deep-more', `
+                <button id="deep-more-control" type="button"
+                        aria-expanded="false"
+                        style="display:block;width:120px;height:34px">More</button>
+              `)}
+            </div>
+          </main>
+        `;
+
+        const roots = policy.findAdaptiveUiRoots(document.body, {
+          isVisible: element => {
+            const rect = element.getBoundingClientRect();
+            return rect.width > 0 && rect.height > 0;
+          }
+        });
+
+        assert(roots.includes(document.querySelector('#deep-mixed-cluster')),
+          'deep mixed route/action cluster was not discovered');
+        assert(policy.isAdaptiveUiLabel(
+          document.querySelector('#deep-more-control'),
+          roots
+        ), 'deep action control was outside the inferred adaptive UI scope');
+        assert(!roots.includes(document.querySelector('#deep-main'))
+            && !roots.includes(document.querySelector('#deep-timeline')),
+        'deep navigation discovery opened a page or content container');
+      });
+
       test('irrelevant controls before navigation do not exhaust discovery limits', () => {
         const links = Array.from({ length: 520 }, (_, index) => (
           `<a href="/story/${index}" style="display:block;width:420px;height:20px">Story ${index}</a>`

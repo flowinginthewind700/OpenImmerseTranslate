@@ -36,6 +36,35 @@
           .join('');
       }
 
+      function visibleRect(element) {
+        const rect = element.getBoundingClientRect();
+        let visible = {
+          top: rect.top,
+          right: rect.right,
+          bottom: rect.bottom,
+          left: rect.left
+        };
+        let current = element.parentElement;
+        while (current && current !== document.body) {
+          const style = getComputedStyle(current);
+          const clipsX = ['hidden', 'clip'].includes(style.overflowX || style.overflow);
+          const clipsY = ['hidden', 'clip'].includes(style.overflowY || style.overflow);
+          if (clipsX || clipsY) {
+            const clip = current.getBoundingClientRect();
+            if (clipsX) {
+              visible.left = Math.max(visible.left, clip.left);
+              visible.right = Math.min(visible.right, clip.right);
+            }
+            if (clipsY) {
+              visible.top = Math.max(visible.top, clip.top);
+              visible.bottom = Math.min(visible.bottom, clip.bottom);
+            }
+          }
+          current = current.parentElement;
+        }
+        return visible;
+      }
+
       function test(name, fn) {
         tests.push({ name, fn });
       }
@@ -364,6 +393,157 @@
         core.restoreTranslationView(record);
         assert(title.getAttribute('style') === 'height:24px;min-height:24px;line-height:24px;font-size:16px;max-height:24px',
           'title style was not restored exactly');
+      });
+
+      test('large linked article cards are not treated as compact controls', () => {
+        document.body.innerHTML = `
+          <a id="story-link" href="/story"
+             style="display:block;width:640px;height:240px;overflow:hidden">
+            <article id="story-card"
+                     style="display:block;width:640px;height:220px;overflow:hidden">
+              <p id="story-copy"
+                 style="display:block;width:600px;height:72px;max-height:72px;
+                        overflow:hidden;line-height:24px">
+                A long-form story summary remains inside its article-sized card.
+              </p>
+            </article>
+          </a>
+        `;
+        const link = document.querySelector('#story-link');
+        const article = document.querySelector('#story-card');
+        const host = document.querySelector('#story-copy');
+        const originalMarkup = document.body.innerHTML;
+        const template = core.buildInlineTemplate(host);
+
+        assert(!core.isCompactTranslationTarget(host),
+          'a linked article-sized card was incorrectly classified as a compact control');
+        const record = core.createTranslationView(
+          host,
+          '长篇内容仍然保留在文章尺寸的卡片边界内。',
+          template,
+          { showOriginal: true }
+        );
+
+        assert(host.style.height === 'auto' && host.style.maxHeight === 'none',
+          'the nearby story text flow was not allowed to expand');
+        assert(getComputedStyle(article).height === '220px'
+            && getComputedStyle(article).overflow === 'hidden',
+        'the article card boundary was opened by the compact layout rule');
+        assert(getComputedStyle(link).height === '240px',
+          'the linked story card height was changed');
+
+        core.restoreTranslationView(record);
+        assert(document.body.innerHTML === originalMarkup,
+          'the large linked article card was not restored exactly');
+      });
+
+      test('compact nowrap label releases every clipping constraint on its text flow', () => {
+        document.body.innerHTML = `
+          <div style="width:320px;height:180px">
+            <a id="control" href="/notifications"
+               style="display:flex;align-items:center;width:200px;height:32px;
+                      max-height:32px;overflow:hidden;white-space:nowrap">
+              <span id="host"
+                    style="display:-webkit-box;width:150px;height:22px;
+                           max-height:22px;overflow:hidden;white-space:nowrap;
+                           -webkit-line-clamp:1;-webkit-box-orient:vertical">Notifications</span>
+              <span id="badge" style="display:block;width:20px;height:20px">4</span>
+            </a>
+          </div>
+        `;
+        const control = document.querySelector('#control');
+        const host = document.querySelector('#host');
+        const badge = document.querySelector('#badge');
+        const originalStyle = control.getAttribute('style');
+        const originalHostStyle = host.getAttribute('style');
+        const template = core.buildInlineTemplate(host);
+        const record = core.createTranslationView(
+          host,
+          '这是用于验证动态时间线导航标签完整可见性的中文译文',
+          template,
+          { showOriginal: true }
+        );
+        const translation = host.querySelector(':scope > .oit-translation');
+        const translationRect = translation.getBoundingClientRect();
+        const visible = visibleRect(translation);
+
+        assert(host.style.height === 'auto' && host.style.maxHeight === 'none',
+          'compact label height constraints were not released');
+        assert(host.style.webkitLineClamp === 'none',
+          'compact label line clamp was not released');
+        assert(getComputedStyle(host).overflowX === 'visible'
+            && getComputedStyle(host).overflowY === 'visible',
+        'compact label still clips its bilingual text flow');
+        assert(getComputedStyle(host).whiteSpace === 'nowrap',
+          'the original compact label changed its nowrap behavior');
+        assert(getComputedStyle(translation).whiteSpace === 'normal',
+          'the translation inherited nowrap and can remain horizontally clipped');
+        assert(visible.right >= translationRect.right - 1
+            && visible.bottom >= translationRect.bottom - 1,
+        'the translated label remains outside its visible clipping area');
+        assert(document.querySelector('#badge') === badge
+            && badge.textContent.trim() === '4',
+        'releasing the label flow changed the auxiliary badge');
+
+        core.restoreTranslationView(record);
+        assert(control.getAttribute('style') === originalStyle,
+          'compact control styles were not restored exactly');
+        assert(host.getAttribute('style') === originalHostStyle,
+          'compact label styles were not restored exactly');
+      });
+
+      test('clipping constraints across deep wrapper chains release only inside the compact control', () => {
+        const wrappers = Array.from({ length: 9 }, (_, index) => (
+          `<span id="wrapper-${index}"
+                 style="display:block;width:160px;height:22px;max-height:22px;
+                        overflow:hidden;white-space:nowrap;
+                        -webkit-line-clamp:1;-webkit-box-orient:vertical">`
+        )).join('');
+        const closing = '</span>'.repeat(9);
+        document.body.innerHTML = `
+          <div id="safe-card" style="display:block;width:260px;height:180px;overflow:hidden">
+            <a id="deep-control" href="/messages"
+               style="display:flex;align-items:center;width:220px;height:40px;
+                      max-height:40px;overflow:hidden;white-space:nowrap">
+              ${wrappers}
+                <span id="deep-host">Direct messages and conversation requests</span>
+              ${closing}
+            </a>
+          </div>
+        `;
+        const card = document.querySelector('#safe-card');
+        const control = document.querySelector('#deep-control');
+        const host = document.querySelector('#deep-host');
+        const originalMarkup = document.body.innerHTML;
+        const template = core.buildInlineTemplate(host);
+        const record = core.createTranslationView(
+          host,
+          '这是一条需要完整显示在深层动态应用外壳中的中文翻译内容',
+          template,
+          { showOriginal: true }
+        );
+        const translation = host.querySelector(':scope > .oit-translation');
+        const translationRect = translation.getBoundingClientRect();
+        const visible = visibleRect(translation);
+
+        for (const element of [host, ...control.querySelectorAll('span')]) {
+          if (element === translation) continue;
+          const style = getComputedStyle(element);
+          assert(!['hidden', 'clip'].includes(style.overflowX)
+              && !['hidden', 'clip'].includes(style.overflowY),
+          `deep text-flow wrapper still clips the translation: ${element.id}`);
+        }
+        assert(control.style.height === 'auto' && control.style.maxHeight === 'none',
+          'deep compact control height constraints were not released');
+        assert(visible.right >= translationRect.right - 1
+            && visible.bottom >= translationRect.bottom - 1,
+        'a deep text-flow wrapper still clips the rendered translation');
+        assert(getComputedStyle(card).overflow === 'hidden',
+          'the protected page card boundary was opened');
+
+        core.restoreTranslationView(record);
+        assert(document.body.innerHTML === originalMarkup,
+          'deep text-flow constraints were not restored exactly');
       });
 
       test('line-clamped copy keeps the same line budget for both languages', () => {

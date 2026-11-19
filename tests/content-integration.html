@@ -2830,6 +2830,126 @@
         }
       });
 
+      test('React replacement of an entire X label element retranslates the new host', async () => {
+        resetContentState();
+        const originalSendMessage = chrome.runtime.sendMessage;
+        const waitFor = async (predicate, timeout = 2500) => {
+          const deadline = performance.now() + timeout;
+          while (performance.now() < deadline) {
+            if (predicate()) return true;
+            await sleep(20);
+          }
+          return predicate();
+        };
+
+        document.title = 'Whole label replacement';
+        document.body.innerHTML = `
+          <div style="display:flex;width:960px;height:680px">
+            <header data-testid="SideNav"
+                    style="display:block;width:240px;height:420px">
+              <a id="x-whole-home-control"
+                 href="/home"
+                 style="display:flex;width:220px;height:38px;overflow:hidden">
+                <span id="x-whole-home-label">Home</span>
+              </a>
+              <a id="x-whole-explore-control"
+                 href="/explore"
+                 style="display:flex;width:220px;height:38px;overflow:hidden">
+                <span id="x-whole-explore-label">Explore</span>
+              </a>
+              <button id="x-whole-more-control" type="button"
+                      style="display:flex;width:220px;height:38px;overflow:hidden">
+                <span id="x-whole-more-label">More</span>
+              </button>
+            </header>
+            <main style="display:block;width:700px;height:640px">
+              <article>
+                <div data-testid="tweetText" lang="en" dir="auto">
+                  A stable post keeps the whole-label replacement fixture observable.
+                </div>
+              </article>
+            </main>
+          </div>
+        `;
+
+        const homeControl = document.querySelector('#x-whole-home-control');
+        const oldLabel = document.querySelector('#x-whole-home-label');
+        const originalHref = homeControl.getAttribute('href');
+        let clicks = 0;
+        homeControl.addEventListener('click', event => {
+          event.preventDefault();
+          clicks++;
+        });
+        state.config = {
+          showOriginal: true,
+          autoDetect: false,
+          targetLang: 'zh-CN',
+          maxConcurrent: 4,
+          translationScope: 'smart'
+        };
+        state.scope = 'smart';
+        state.isActive = true;
+        state.shouldStop = false;
+        state.lifecycle.start();
+        state.scanContext = pageScanner.createScanContext({
+          scope: 'smart',
+          site: 'x'
+        });
+        chrome.runtime.sendMessage = async message => {
+          if (message.action === 'abortRequest') return { success: true };
+          if (message.action !== 'translate') return { translations: [] };
+          return { translations: message.texts.map(pseudoTranslate) };
+        };
+
+        try {
+          startMutationObserver();
+          collectViewportBlocks().forEach(block => addToQueue(block));
+          await processQueue();
+          assert(await waitFor(() => (
+            oldLabel.querySelector(':scope > .oit-translation')
+          )), 'initial whole-label fixture did not translate');
+
+          const newLabel = document.createElement('span');
+          newLabel.id = 'x-whole-home-label-replacement';
+          newLabel.style.cssText = [
+            'display:block',
+            'width:170px',
+            'height:22px',
+            'max-height:22px',
+            'overflow:hidden',
+            'white-space:nowrap',
+            '-webkit-line-clamp:1'
+          ].join(';');
+          newLabel.textContent = 'Start';
+          homeControl.replaceChild(newLabel, oldLabel);
+
+          assert(await waitFor(() => {
+            const translation = newLabel.querySelector(':scope > .oit-translation');
+            return translation?.textContent.includes('译Start');
+          }), `whole-label replacement was not retranslated; `
+            + `dynamic=${JSON.stringify(state.dynamicDiagnostics)}`);
+          assert(!oldLabel.isConnected,
+            'React-style whole-label replacement left the stale label connected');
+          assert(newLabel.querySelectorAll(':scope > .oit-translation').length === 1,
+            'whole-label replacement left duplicate translations on the new host');
+          assert(document.querySelector('#x-whole-home-control') === homeControl,
+            'whole-label retranslation replaced the navigation control');
+          assert(homeControl.getAttribute('href') === originalHref,
+            'whole-label retranslation changed the anchor href');
+          homeControl.click();
+          assert(clicks === 1,
+            'whole-label retranslation removed the control click listener');
+          assert(await waitFor(() => isTranslationPipelineIdle()),
+            'whole-label retranslation left the pipeline busy');
+          assert(settleTranslationPipeline(),
+            'whole-label retranslation did not settle the existing session');
+        } finally {
+          chrome.runtime.sendMessage = originalSendMessage;
+          removeAllTranslations();
+          state.fullReset();
+        }
+      });
+
       test('React restructuring keeps one complex control label translation host', async () => {
         resetContentState();
         const originalSendMessage = chrome.runtime.sendMessage;
