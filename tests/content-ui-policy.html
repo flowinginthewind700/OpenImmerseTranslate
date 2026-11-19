@@ -111,6 +111,64 @@
           'article interaction group was incorrectly opened as navigation');
       });
 
+      test('application shells containing the reading region are not navigation roots', () => {
+        document.body.innerHTML = `
+          <div id="reading-shell">
+            <div id="reading-topbar" style="display:flex;width:760px;height:44px">
+              <a id="reading-home" href="/home"
+                 style="display:block;width:130px;height:34px">
+                <span>Home</span>
+              </a>
+              <a id="reading-explore" href="/explore"
+                 style="display:block;width:140px;height:34px">
+                <span>Explore</span>
+              </a>
+              <a id="reading-messages" href="/messages"
+                 style="display:block;width:150px;height:34px">
+                <span>Messages</span>
+              </a>
+            </div>
+            <div id="reading-body" style="display:flex;width:760px">
+              <div id="reading-rail" style="display:block;width:200px;height:320px">
+                <a href="/activity" style="display:block;width:180px;height:34px">
+                  <span>Activity</span>
+                </a>
+                <a href="/bookmarks" style="display:block;width:180px;height:34px">
+                  <span>Bookmarks</span>
+                </a>
+                <a href="/settings" style="display:block;width:180px;height:34px">
+                  <span>Settings</span>
+                </a>
+              </div>
+              <main id="reading-main" style="display:block;width:540px;height:500px">
+                <article style="display:block;width:520px;height:360px">
+                  <p>The primary reading region keeps its article content separate from page navigation.</p>
+                </article>
+              </main>
+            </div>
+          </div>
+        `;
+
+        const roots = policy.findAdaptiveUiRoots(document.body, {
+          isVisible: element => {
+            const rect = element.getBoundingClientRect();
+            return rect.width > 0 && rect.height > 0;
+          }
+        });
+        const shell = document.querySelector('#reading-shell');
+        const topbar = document.querySelector('#reading-topbar');
+        const rail = document.querySelector('#reading-rail');
+
+        assert(policy.containsSubstantialReadingRegion(shell),
+          'shared policy did not recognize the application shell reading region');
+        assert(!roots.includes(shell),
+          'application shell containing main/article was opened as navigation');
+        assert(roots.includes(topbar),
+          'precise top navigation was discarded with the application shell');
+        assert(roots.includes(rail),
+          'precise side navigation was discarded with the application shell');
+      });
+
       test('visible non-semantic horizontal menus are recognized as persistent navigation', () => {
         document.body.innerHTML = `
           <div id="topbar-shell">

@@ -5,14 +5,18 @@
  * discovery. Generic filtering, unitization, and translation remain shared.
  */
 (function initXSiteProfile(root, factory) {
-  const api = factory();
+  const uiPolicy = root.OITContentUiPolicy
+    || (typeof require === 'function' ? require('../content-ui-policy.js') : null);
+  const api = factory(uiPolicy);
 
   if (typeof module === 'object' && module.exports) {
     module.exports = api;
   }
 
   root.OITSiteProfileX = api;
-})(typeof globalThis !== 'undefined' ? globalThis : this, function createXSiteProfile() {
+})(typeof globalThis !== 'undefined' ? globalThis : this, function createXSiteProfile(
+  uiPolicy
+) {
   'use strict';
 
   const X_HOSTS = new Set([
@@ -253,7 +257,14 @@
     return new Set(controls.map(getXPath).filter(Boolean)).size;
   }
 
-  function isEligibleNavigationCluster(root, controls) {
+  function containsReadingRegion(root, options = {}) {
+    return Boolean(
+      uiPolicy?.containsSubstantialReadingRegion?.(root, options)
+    );
+  }
+
+  function isEligibleNavigationCluster(root, controls, options = {}) {
+    if (containsReadingRegion(root, options)) return false;
     if (controls.length < 2
         || controls.length > NAVIGATION_CLUSTER_CONTROL_LIMIT) {
       return false;
@@ -275,7 +286,7 @@
     return hasRepeatedRoutes || hasAnchoredRail;
   }
 
-  function findGroupedNavigationRoots(base) {
+  function findGroupedNavigationRoots(base, options = {}) {
     const controls = collectMatches(base, NAVIGATION_CONTROL_SELECTOR)
       .filter(control => !control.closest?.(POST_CONTAINER))
       .slice(0, NAVIGATION_CONTROL_LIMIT);
@@ -297,7 +308,7 @@
 
     const eligible = Array.from(rootLinks.entries())
       .filter(([root, containedControls]) => (
-        isEligibleNavigationCluster(root, containedControls)
+        isEligibleNavigationCluster(root, containedControls, options)
       ))
       .map(([root, containedControls]) => ({ root, containedControls }));
 
@@ -351,11 +362,12 @@
     return ADAPTIVE_ROOT_SOURCE_PRIORITY[source] || 0;
   }
 
-  function normalizeAdaptiveRoots(candidates) {
+  function normalizeAdaptiveRoots(candidates, options = {}) {
     const sourceByRoot = new Map();
     for (const candidate of candidates) {
       const root = candidate?.root;
       if (root?.nodeType !== 1 || !root.isConnected) continue;
+      if (containsReadingRegion(root, options)) continue;
       const existingSource = sourceByRoot.get(root);
       if (!existingSource
           || getAdaptiveRootSourcePriority(candidate.source)
@@ -525,21 +537,21 @@
     return normalizeSupplementalRoots(roots);
   }
 
-  function diagnoseAdaptiveRoots(base = globalThis.document?.body) {
+  function diagnoseAdaptiveRoots(base = globalThis.document?.body, options = {}) {
     if (!base?.querySelectorAll) return [];
     const candidates = [
       ...collectMatches(base, EXPLICIT_ADAPTIVE_ROOT_SELECTOR)
         .map(root => ({ root, source: 'x:explicit' })),
-      ...findGroupedNavigationRoots(base)
+      ...findGroupedNavigationRoots(base, options)
         .map(root => ({ root, source: 'x:route-cluster' })),
       ...findGroupedSideNavRoots(base)
         .map(root => ({ root, source: 'x:sidenav-cluster' }))
     ];
-    return normalizeAdaptiveRoots(candidates);
+    return normalizeAdaptiveRoots(candidates, options);
   }
 
-  function findAdaptiveRoots(base = globalThis.document?.body) {
-    return diagnoseAdaptiveRoots(base).map(item => item.root);
+  function findAdaptiveRoots(base = globalThis.document?.body, options = {}) {
+    return diagnoseAdaptiveRoots(base, options).map(item => item.root);
   }
 
   function findContentRoots(base = globalThis.document?.body, options = {}) {
@@ -581,7 +593,7 @@
     return nestedRoot;
   }
 
-  function getAdaptiveRoot(element) {
+  function getAdaptiveRoot(element, options = {}) {
     const normalized = element?.nodeType === 1 ? element : element?.parentElement;
     if (!normalized?.matches || normalized.closest?.(POST_CONTAINER)) return null;
 
@@ -590,7 +602,7 @@
     const semantic = normalized.closest?.(NAVIGATION_SELECTOR);
     if (semantic) return semantic;
     const documentRef = normalized.ownerDocument || globalThis.document;
-    const discovered = findAdaptiveRoots(documentRef?.body || documentRef)
+    const discovered = findAdaptiveRoots(documentRef?.body || documentRef, options)
       .find(root => root === normalized || root.contains(normalized));
     if (discovered) return discovered;
 
@@ -598,7 +610,7 @@
     const appTab = normalized.closest?.('[data-testid^="AppTabBar_"]');
     if (!appTab && !isNavigationLink(link)) return null;
 
-    return findAdaptiveRoots(documentRef?.body || documentRef)
+    return findAdaptiveRoots(documentRef?.body || documentRef, options)
       .find(root => root === normalized || root.contains(normalized)) || null;
   }
 

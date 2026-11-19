@@ -36,6 +36,9 @@
     'article', '[role="article"]', 'blockquote',
     'p', '[class*="description"]', '[class*="summary"]'
   ].join(',');
+  const PRIMARY_READING_REGION_SELECTOR = [
+    'main', '[role="main"]', 'article', '[role="article"]'
+  ].join(',');
   const DEFAULT_NAVIGATION_LIMITS = Object.freeze({
     minControls: 3,
     maxControls: 500,
@@ -171,6 +174,32 @@
       current = getComposedParentElement(current);
     }
     return hasVisibleArea(element);
+  }
+
+  /**
+   * Navigation inference may walk from split top bars and rails into their
+   * layout shell. Such a shell is not a navigation collection once it contains
+   * a visible reading region: treating it as one turns post authors, dates and
+   * actions into navigation labels. Keep the bounded child roots instead.
+   */
+  function containsSubstantialReadingRegion(root, options = {}) {
+    if (!root?.querySelectorAll) return false;
+    const isVisible = typeof options.isVisible === 'function'
+      ? options.isVisible
+      : defaultIsVisible;
+    const regions = root.matches?.(PRIMARY_READING_REGION_SELECTOR) ? [root] : [];
+    regions.push(...root.querySelectorAll(PRIMARY_READING_REGION_SELECTOR));
+
+    return regions.some(region => {
+      if (!isVisible(region)) return false;
+      const rect = getRect(region);
+      if (rect.width <= 0 || rect.height <= 0) return false;
+      const text = normalizeText(region.textContent);
+      return text.length >= 24
+        || Boolean(region.querySelector(
+          'p, blockquote, pre, h1, h2, h3, [data-testid="tweetText"]'
+        ));
+    });
   }
 
   function getNormalizedRoots(roots) {
@@ -380,6 +409,10 @@
       ))
       .map(([root]) => root);
     const discovered = Array.from(new Set([...semanticRoots, ...inferredRoots]))
+      .filter(root => !containsSubstantialReadingRegion(root, {
+        ...options,
+        isVisible
+      }))
       .slice(0, limits.maxRoots);
 
     return discovered.filter(root => !discovered.some(other => (
@@ -426,8 +459,10 @@
     ADAPTIVE_UI_ROOT_SELECTOR,
     INTERACTIVE_CONTROL_SELECTOR,
     NAVIGATION_COLLECTION_EXCLUSION_SELECTOR,
+    PRIMARY_READING_REGION_SELECTOR,
     getComposedParentElement,
     hasVisibleArea,
+    containsSubstantialReadingRegion,
     isVisibleAdaptiveUiRoot,
     isAdaptiveUiRoot,
     isWithinAdaptiveUiScope,

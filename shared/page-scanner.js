@@ -397,6 +397,11 @@
     if (!context?.adaptiveUiRoots) return 'missing-context';
     if (!root?.isConnected) return 'disconnected';
     if (isOwnedElement(root)) return 'owned-translation';
+    if (uiPolicy.containsSubstantialReadingRegion(root, {
+      isVisible: element => isVisible(element, context)
+    })) {
+      return 'contains-reading-region';
+    }
     if (!uiPolicy.isVisibleAdaptiveUiRoot(root, {
       isVisible: element => isVisible(element, context)
     })) {

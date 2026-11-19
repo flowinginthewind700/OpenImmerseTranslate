@@ -671,6 +671,180 @@
         }
       });
 
+      test('X route inference rejects application shells that contain the reading region', () => {
+        const fixture = document.createElement('div');
+        fixture.id = 'x-reading-overlap-fixture';
+        fixture.innerHTML = `
+          <div id="x-reading-overlap-shell"
+               style="display:block;width:1200px;min-height:760px">
+            <div id="x-reading-overlap-topbar"
+                 style="display:flex;width:1200px;height:48px;overflow:hidden">
+              <a href="/home" style="display:flex;width:150px;height:38px">
+                <span id="x-reading-overlap-top-home">Home</span>
+              </a>
+              <a href="/explore" style="display:flex;width:150px;height:38px">
+                <span id="x-reading-overlap-top-explore">Explore</span>
+              </a>
+              <a href="/notifications" style="display:flex;width:170px;height:38px">
+                <span id="x-reading-overlap-top-notifications">Notifications</span>
+              </a>
+            </div>
+            <div id="x-reading-overlap-body"
+                 style="display:flex;align-items:flex-start;width:1200px">
+              <div id="x-reading-overlap-rail"
+                   style="display:block;width:240px;height:360px;overflow:hidden">
+                <a href="/home" style="display:flex;width:220px;height:38px">
+                  <span id="x-reading-overlap-rail-home">Home</span>
+                </a>
+                <a href="/alice" style="display:flex;width:220px;height:38px">
+                  <span id="x-reading-overlap-rail-profile">Profile</span>
+                </a>
+                <a href="/messages" style="display:flex;width:220px;height:38px">
+                  <span id="x-reading-overlap-rail-messages">Messages</span>
+                </a>
+                <a href="/settings" style="display:flex;width:220px;height:38px">
+                  <span id="x-reading-overlap-rail-settings">Settings</span>
+                </a>
+                <a href="/i/bookmarks" style="display:flex;width:220px;height:38px">
+                  <span id="x-reading-overlap-rail-bookmarks">Bookmarks</span>
+                </a>
+              </div>
+              <main id="x-reading-overlap-main"
+                    style="display:block;width:620px;min-height:620px">
+                <section id="x-reading-overlap-profile"
+                         style="display:block;width:600px;min-height:180px">
+                  <div data-testid="UserName">
+                    <a href="/elonmusk" style="display:block;width:180px;height:32px">
+                      <span id="x-reading-overlap-profile-name">Elon Musk</span>
+                    </a>
+                    <button type="button" style="display:block;width:180px;height:32px">
+                      <span id="x-reading-overlap-verified">Verified account</span>
+                    </button>
+                  </div>
+                  <a href="/elonmusk/status/1"
+                     style="display:block;width:120px;height:32px">
+                    <time datetime="2026-11-17T00:00:00Z">
+                      <span id="x-reading-overlap-date">Nov 17</span>
+                    </time>
+                  </a>
+                  <div data-engagement-action="more">
+                    <button type="button" style="display:block;width:100px;height:32px">
+                      <span id="x-reading-overlap-more">More</span>
+                    </button>
+                  </div>
+                  <div data-engagement-action="play">
+                    <button type="button" style="display:block;width:100px;height:32px">
+                      <span id="x-reading-overlap-play">Play</span>
+                    </button>
+                  </div>
+                </section>
+                <article id="x-reading-overlap-post">
+                  <div id="x-reading-overlap-post-text"
+                       data-testid="tweetText"
+                       lang="en"
+                       dir="auto">
+                    Timeline content must remain separate from application navigation.
+                  </div>
+                </article>
+              </main>
+            </div>
+          </div>
+        `;
+        document.body.append(fixture);
+
+        try {
+          const adapters = window.OITSiteAdapters;
+          const roots = adapters.findAdaptiveRoots(document.body, { site: 'x' });
+          const shell = document.querySelector('#x-reading-overlap-shell');
+          const topbar = document.querySelector('#x-reading-overlap-topbar');
+          const rail = document.querySelector('#x-reading-overlap-rail');
+
+          assert(!roots.includes(shell),
+            'X route inference accepted an application shell containing main');
+          assert(roots.includes(topbar),
+            'rejecting the application shell also discarded the precise top bar root');
+          assert(roots.includes(rail),
+            'rejecting the application shell also discarded the precise rail root');
+
+          const context = scanner.createScanContext({ scope: 'smart', site: 'x' });
+          const candidates = scanner.collectPageCandidates('smart', {
+            context,
+            site: 'x'
+          });
+          const byId = new Map(candidates.map(candidate => [candidate.element.id, candidate]));
+
+          for (const expected of [
+            'x-reading-overlap-top-home',
+            'x-reading-overlap-top-explore',
+            'x-reading-overlap-top-notifications',
+            'x-reading-overlap-rail-home',
+            'x-reading-overlap-rail-profile',
+            'x-reading-overlap-rail-messages',
+            'x-reading-overlap-rail-settings',
+            'x-reading-overlap-rail-bookmarks'
+          ]) {
+            assert(byId.get(expected)?.siteRole === 'navigation-label',
+              `precise X chrome did not translate as navigation: ${expected}`);
+          }
+          for (const excluded of [
+            'x-reading-overlap-profile-name',
+            'x-reading-overlap-verified',
+            'x-reading-overlap-date',
+            'x-reading-overlap-more',
+            'x-reading-overlap-play'
+          ]) {
+            assert(!byId.has(excluded),
+              `reading-region metadata was misclassified as navigation: ${excluded}; `
+                + `${JSON.stringify(byId.get(excluded) && {
+                  siteRole: byId.get(excluded).siteRole,
+                  reason: byId.get(excluded).reason,
+                  text: byId.get(excluded).text
+                })}`);
+          }
+          assert(byId.get('x-reading-overlap-post-text')?.siteRole === 'post-body',
+            'timeline post body lost its semantic role');
+
+          const newRailLink = document.createElement('a');
+          newRailLink.href = '/jobs';
+          newRailLink.setAttribute(
+            'style',
+            'display:flex;width:220px;height:38px'
+          );
+          newRailLink.innerHTML = '<span id="x-reading-overlap-late-jobs">Jobs</span>';
+          rail.append(newRailLink);
+          const dynamicRail = scanner.collectDynamicCandidates(newRailLink, 'smart', {
+            context,
+            site: 'x'
+          });
+          assert(dynamicRail.some(candidate => (
+            candidate.element.id === 'x-reading-overlap-late-jobs'
+            && candidate.siteRole === 'navigation-label'
+          )), 'late X rail label did not use the same safe navigation path');
+
+          const main = document.querySelector('#x-reading-overlap-main');
+          const latePost = document.createElement('article');
+          latePost.innerHTML = `
+            <div id="x-reading-overlap-late-post-text"
+                 data-testid="tweetText"
+                 lang="en"
+                 dir="auto">
+              A newly rendered post must remain a post body.
+            </div>
+          `;
+          main.append(latePost);
+          const dynamicPost = scanner.collectDynamicCandidates(latePost, 'smart', {
+            context,
+            site: 'x'
+          });
+          assert(dynamicPost.some(candidate => (
+            candidate.element.id === 'x-reading-overlap-late-post-text'
+            && candidate.siteRole === 'post-body'
+          )), 'late X post did not use the same content path');
+        } finally {
+          fixture.remove();
+        }
+      });
+
       test('smart X scope discovers a reused menu when it changes from hidden to visible', () => {
         document.body.insertAdjacentHTML('afterbegin', `
           <header id="x-reveal-header">
