@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Content script injection browser tests</title>
+</head>
+<body>
+  <script src="../shared/content-script-injection.js"></script>
+  <script>
+    window.runContentScriptInjectionTests = async () => {
+      const tests = [];
+      const assert = (condition, message) => {
+        if (!condition) throw new Error(message);
+      };
+      const test = (name, fn) => tests.push({ name, fn });
+      const manifest = {
+        content_scripts: [
+          {
+            matches: ['<all_urls>'],
+            js: [
+              'shared/content-signals.js',
+              'shared/translation-session.js',
+              'content/content.js'
+            ],
+            css: ['styles/content.css']
+          }
+        ]
+      };
+
+      test('resolves the complete manifest bundle in dependency order', () => {
+        const assets = OITContentScriptInjection.resolveContentScriptAssets(manifest);
+
+        assert(assets.scripts.length === 3,
+          'resolved bundle did not include every manifest script');
+        assert(assets.scripts[0] === 'shared/content-signals.js'
+            && assets.scripts[2] === 'content/content.js',
+        'resolved bundle did not preserve manifest dependency order');
+        assert(assets.css.length === 1 && assets.css[0] === 'styles/content.css',
+          'resolved bundle did not include manifest CSS');
+      });
+
+      test('injects CSS first and then every script in one ordered call', async () => {
+        const calls = [];
+        const api = {
+          runtime: { getManifest: () => manifest },
+          scripting: {
+            async insertCSS(details) {
+              calls.push({ type: 'css', details });
+            },
+            async executeScript(details) {
+              calls.push({ type: 'scripts', details });
+            }
+          }
+        };
+
+        const assets = await OITContentScriptInjection.injectContentScriptAssets(
+          api,
+          42
+        );
+
+        assert(calls.length === 2, 'injection did not make exactly two API calls');
+        assert(calls[0].type === 'css' && calls[1].type === 'scripts',
+          'injection order was not CSS then scripts');
+        assert(calls[0].details.target.tabId === 42,
+          'CSS injection targeted the wrong tab');
+        assert(calls[1].details.target.tabId === 42,
+          'script injection targeted the wrong tab');
+        assert(calls[1].details.files.join(',') === assets.scripts.join(','),
+          'script injection omitted shared kernels or changed dependency order');
+      });
+
+      test('continues with scripts when idempotent CSS injection fails', async () => {
+        let cssError = null;
+        let executedFiles = null;
+        const api = {
+          runtime: { getManifest: () => manifest },
+          scripting: {
+            async insertCSS() {
+              throw new Error('stylesheet already exists');
+            },
+            async executeScript(details) {
+              executedFiles = details.files;
+            }
+          }
+        };
+
+        await OITContentScriptInjection.injectContentScriptAssets(api, 7, {
+          onCssError(error) {
+            cssError = error;
+          }
+        });
+
+        assert(cssError?.message === 'stylesheet already exists',
+          'CSS failure was not reported to the caller');
+        assert(executedFiles?.includes('content/content.js'),
+          'CSS failure prevented the content script bundle from executing');
+      });
+
+      test('rejects a manifest without the page translation entry script', () => {
+        let error = null;
+        try {
+          OITContentScriptInjection.resolveContentScriptAssets({
+            content_scripts: [{ js: ['content/other.js'] }]
+          });
+        } catch (cause) {
+          error = cause;
+        }
+
+        assert(error instanceof Error && error.message.includes('content/content.js'),
+          'missing page translation entry was not rejected');
+      });
+
+      const failures = [];
+      for (const item of tests) {
+        try {
+          await item.fn();
+        } catch (error) {
+          failures.push({ name: item.name, error: error.stack || error.message });
+        }
+      }
+      return { total: tests.length, failures };
+    };
+  </script>
+</body>
+</html>

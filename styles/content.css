@@ -3,32 +3,15 @@
  * 沉浸式翻译样式 - 双语对照内嵌显示
  */
 
-/* 翻译包装器 - 保持行内或块级显示 */
-.oit-wrapper {
-  display: inline;
-}
-
-/* 段落级别的包装器 */
-p .oit-wrapper,
-h1 .oit-wrapper,
-h2 .oit-wrapper,
-h3 .oit-wrapper,
-h4 .oit-wrapper,
-h5 .oit-wrapper,
-h6 .oit-wrapper,
-li .oit-wrapper,
-td .oit-wrapper,
-th .oit-wrapper,
-blockquote .oit-wrapper {
-  display: block;
-}
-
-/* 原文 - 保持原样显示 */
+/* 原文节点保持原有结构；仅单语模式使用隐藏包装器。 */
 .oit-original {
-  display: block;
   color: inherit;
   font-size: inherit;
   line-height: inherit;
+}
+
+.oit-original-hidden {
+  display: none !important;
 }
 
 /* 翻译结果 - 沉浸式显示在原文下方 */
@@ -52,16 +35,22 @@ blockquote .oit-wrapper {
 }
 
 /* 网站深色背景检测（通过背景色判断） */
-.oit-wrapper.oit-dark .oit-translation {
+.oit-translation.oit-dark {
   color: #9ca3af;
 }
 
-/* 仅显示翻译模式（隐藏原文） */
-.oit-translation.oit-only {
-  color: inherit;
-  font-size: inherit;
+.oit-inline-translation {
+  display: inline;
   margin-top: 0;
-  padding: 0;
+  margin-left: 4px;
+}
+
+.oit-plaintext-translation {
+  white-space: pre-wrap;
+  margin-top: 1em;
+  padding-top: 1em;
+  border-top: 1px solid rgba(127, 127, 127, 0.28);
+  font: inherit;
 }
 
 /* 标题特殊处理 */
@@ -86,21 +75,10 @@ li .oit-translation {
   margin-left: 0;
 }
 
-/* 链接内的翻译 */
+/* 链接内的翻译不使用额外括号，避免破坏按钮和富文本链接。 */
 a .oit-translation {
   display: inline;
-  margin-left: 4px;
   color: #888888;
-}
-
-a .oit-translation::before {
-  content: '(';
-  color: #aaaaaa;
-}
-
-a .oit-translation::after {
-  content: ')';
-  color: #aaaaaa;
 }
 
 /* 浮动翻译按钮 */
@@ -425,6 +403,8 @@ a .oit-translation::after {
 }
 
 /* 翻译结果可选择，原文也可选择 */
+.oit-translated-host > .oit-original,
+.oit-translated-host > .oit-translation,
 .oit-wrapper .oit-original,
 .oit-wrapper .oit-translation {
   user-select: text;

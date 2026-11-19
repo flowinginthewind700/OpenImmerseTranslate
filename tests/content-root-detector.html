@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Content root detector browser tests</title>
+</head>
+<body>
+  <script src="../shared/content-signals.js"></script>
+  <script src="../shared/content-unit-classifier.js"></script>
+  <script src="../shared/content-root-detector.js"></script>
+  <script>
+    window.runContentRootDetectorTests = () => {
+      const detector = window.OITContentRootDetector;
+      const tests = [];
+      const assert = (condition, message) => {
+        if (!condition) throw new Error(message);
+      };
+      const test = (name, fn) => tests.push({ name, fn });
+      const detect = (options = {}) => detector.detectContentRoot(document.body, options);
+
+      test('a unique normal article uses the semantic fast path', () => {
+        document.body.innerHTML = `
+          <header><a href="/">Home</a></header>
+          <main><article id="article">
+            <h1>A detailed engineering article</h1>
+            <p>The first paragraph contains substantial prose and concrete details.</p>
+            <p>The second paragraph expands the argument and concludes the section.</p>
+          </article></main>
+        `;
+
+        const result = detect();
+        assert(result.root.id === 'article', `root was ${result.root.id}`);
+        assert(result.strategy === 'unique-article', `strategy was ${result.strategy}`);
+        assert(result.trusted === true, 'unique article was not trusted');
+      });
+
+      test('multiple articles disable the unique fast path', () => {
+        document.body.innerHTML = `
+          <main>
+            <article id="first"><h2>First report</h2><p>Enough prose for the first report to look substantial.</p></article>
+            <article id="second"><h2>Second report</h2><p>Enough prose for the second report to look substantial.</p></article>
+          </main>
+        `;
+
+        const result = detect();
+        assert(result.strategy !== 'unique-article', 'multiple articles used unique fast path');
+        assert(result.root.id !== 'first' && result.root.id !== 'second',
+          `multiple articles resolved arbitrarily to ${result.root.id}`);
+      });
+
+      test('a unique main wins over a competing comments region', () => {
+        document.body.innerHTML = `
+          <div id="comments">
+            <h2>Comments</h2>
+            <p>Many comments contain enough words to look like ordinary prose.</p>
+            <p>Additional comment text makes this region surprisingly large.</p>
+          </div>
+          <main id="main">
+            <article>
+              <h1>The actual article</h1>
+              <p>This paragraph is the primary reading content on the page.</p>
+            </article>
+          </main>
+        `;
+
+        const result = detect();
+        assert(result.root.id === 'main', `root was ${result.root.id}`);
+        assert(result.trusted === true, 'unique main was not trusted');
+      });
+
+      test('independent semantic content regions retain separate roots', () => {
+        document.body.innerHTML = `
+          <header><a href="/">Home</a></header>
+          <main id="primary-region">
+            <article>
+              <h1>Primary report</h1>
+              <p>The primary report contains enough prose to establish its reading surface.</p>
+              <p>A second paragraph keeps the primary region clearly readable.</p>
+            </article>
+          </main>
+          <aside id="sidebar-region"><p>Navigation and account controls live here.</p></aside>
+          <main id="secondary-region">
+            <article>
+              <h1>Secondary report</h1>
+              <p>The secondary region is independently rendered by the same application.</p>
+              <p>Its prose must not be lost when another primary region already exists.</p>
+            </article>
+          </main>
+        `;
+
+        const result = detect();
+        const rootIds = result.roots.map(root => root.id);
+
+        assert(rootIds.includes('primary-region'),
+          `primary region was not retained: ${rootIds.join(', ')}`);
+        assert(rootIds.includes('secondary-region'),
+          `secondary region was not retained: ${rootIds.join(', ')}`);
+        assert(!rootIds.includes('sidebar-region'),
+          'non-content sidebar was promoted to a content root');
+        assert(!rootIds.includes('primary-region') || !rootIds.includes('secondary-region')
+          || !result.roots.some(root => root.id === 'primary-region'
+            && root.contains(document.querySelector('#secondary-region'))),
+        'independent roots were incorrectly nested');
+      });
+
+      test('sibling title and body regions promote a content shell', () => {
+        document.body.innerHTML = `
+          <div id="story-shell">
+            <div id="story-heading" class="story-title"><h1>A story with a separate title region</h1></div>
+            <div id="story-body">
+              <p>The opening paragraph has enough meaningful prose to identify the body.</p>
+              <p>A second paragraph confirms that this is the primary reading surface.</p>
+            </div>
+          </div>
+        `;
+
+        const result = detect();
+        assert(result.root.id === 'story-shell', `root was ${result.root.id}`);
+        assert(result.strategy === 'content-shell-promotion',
+          `strategy was ${result.strategy}`);
+      });
+
+      test('a high-link article index is not trusted as an article body', () => {
+        document.body.innerHTML = `
+          <main id="index">
+            <article id="card-index">
+              <a href="/one"><h2>First linked story</h2><p>Short summary for the first story.</p></a>
+              <a href="/two"><h2>Second linked story</h2><p>Short summary for the second story.</p></a>
+              <a href="/three"><h2>Third linked story</h2><p>Short summary for the third story.</p></a>
+            </article>
+          </main>
+        `;
+
+        const result = detect();
+        assert(result.trusted === false, 'link index was trusted as article prose');
+        assert(result.strategy !== 'unique-article', 'link index used article fast path');
+      });
+
+      const failures = [];
+      for (const item of tests) {
+        try {
+          item.fn();
+        } catch (error) {
+          failures.push({ name: item.name, error: error.stack || error.message });
+        }
+      }
+      return { total: tests.length, failures };
+    };
+  </script>
+</body>
+</html>

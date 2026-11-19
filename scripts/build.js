@@ -16,6 +16,7 @@ const BUILD_DIR = path.join(DIST_DIR, 'OpenImmerseTranslate');
 const INCLUDE_FILES = [
   'manifest.json',
   'popup',
+  'subtitle',
   'content',
   'background',
   'shared',
@@ -151,7 +152,6 @@ build().catch(error => {
   console.error('❌ 构建失败:', error.message);
   process.exit(1);
 });
-
 
 
 

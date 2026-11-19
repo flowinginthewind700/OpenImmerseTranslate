@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Content unitizer browser tests</title>
+  <style>
+    body { margin: 0; font: 16px/1.5 sans-serif; }
+    p, div, button, summary { min-height: 20px; }
+  </style>
+</head>
+<body>
+  <script src="../shared/content-unitizer.js"></script>
+  <script>
+    window.runContentUnitizerTests = () => {
+      const unitizer = window.OITContentUnitizer;
+      const tests = [];
+      const assert = (condition, message) => {
+        if (!condition) throw new Error(message);
+      };
+      const test = (name, fn) => tests.push({ name, fn });
+      const options = {
+        protectedSelector: [
+          'script', 'style', 'noscript', 'template', 'pre', 'code',
+          '[contenteditable]:not([contenteditable="false"])',
+          '[translate="no"]', '.notranslate'
+        ].join(',')
+      };
+
+      test('mixed containers split direct prose from nested block and controls', () => {
+        document.body.innerHTML = `
+          <main>
+            <div id="mixed">
+              Read <a id="guide" href="/guide">the guide</a> before continuing.
+              <p id="body">This nested paragraph is already a stable translation unit.</p>
+              <button id="save">Save changes</button>
+            </div>
+          </main>
+        `;
+        const parent = document.querySelector('#mixed');
+        const guide = document.querySelector('#guide');
+        const body = document.querySelector('#body');
+        const button = document.querySelector('#save');
+        const targets = unitizer.collectDirectTextRunTargets(parent, options);
+
+        assert(targets.length === 1, `expected one direct text run, got ${targets.length}`);
+        assert(targets[0].textContent.includes('Read the guide before continuing.'),
+          'direct text run lost mixed inline content');
+        assert(!targets[0].contains(body), 'direct text run swallowed the nested paragraph');
+        assert(!targets[0].contains(button), 'direct text run swallowed a control');
+        assert(targets[0].contains(guide), 'safe inline link was not included');
+        assert(targets[0].childNodes.length === 3,
+          'safe inline link split one sentence into multiple direct text runs');
+        assert(document.querySelector('#body') === body, 'nested paragraph identity changed');
+        assert(document.querySelector('#save') === button, 'control identity changed');
+      });
+
+      test('semantic paragraphs and pure inline containers are not wrapped', () => {
+        document.body.innerHTML = `
+          <main>
+            <p id="paragraph">Read <a href="/guide">the guide</a> before continuing.</p>
+            <div id="inline-only"><span>One phrase</span> and <strong>another phrase</strong>.</div>
+          </main>
+        `;
+
+        assert(unitizer.collectDirectTextRunTargets(document.body, options).length === 0,
+          'a stable semantic or pure-inline unit was wrapped');
+        assert(!document.querySelector(unitizer.DIRECT_TEXT_RUN_SELECTOR),
+          'unitizer mutates containers without a mixed layout');
+      });
+
+      test('unitization is idempotent across repeated scans', () => {
+        document.body.innerHTML = `
+          <main><div id="mixed">Introductory sentence.<p>Nested paragraph copy.</p></div></main>
+        `;
+        const mixed = document.querySelector('#mixed');
+        const first = unitizer.collectDirectTextRunTargets(mixed, options);
+        const second = unitizer.collectDirectTextRunTargets(mixed, options);
+
+        assert(first.length === 1 && first[0].isConnected,
+          'initial unitization did not create a target');
+        assert(second.length === 0, 'repeated scan wrapped an existing direct text run');
+        assert(mixed.querySelectorAll(unitizer.DIRECT_TEXT_RUN_SELECTOR).length === 1,
+          'repeated scan created nested wrappers');
+      });
+
+      test('unwrap restores the exact source nodes and order', () => {
+        document.body.innerHTML = `
+          <main><div id="mixed">Read <a id="guide">the guide</a> now.<p>Nested copy.</p></div></main>
+        `;
+        const parent = document.querySelector('#mixed');
+        const guide = document.querySelector('#guide');
+        const firstText = parent.firstChild;
+        const originalOrder = Array.from(parent.childNodes);
+        const [wrapper] = unitizer.collectDirectTextRunTargets(parent, options);
+
+        assert(unitizer.unwrapDirectTextRun(wrapper), 'direct text run was not unwrapped');
+        assert(document.querySelector('#guide') === guide, 'unwrapping replaced an inline link');
+        assert(parent.firstChild === firstText, 'unwrapping changed the first source node');
+        assert(Array.from(parent.childNodes).every(
+          (node, index) => node === originalOrder[index]
+        ), 'unwrapping changed source node order');
+      });
+
+      test('labels, summaries, and table cells remain semantic unit boundaries', () => {
+        document.body.innerHTML = `
+          <main>
+            <label id="label">Account email address</label>
+            <details><summary id="summary">Advanced translation settings</summary><p>Hidden body.</p></details>
+            <table><tr><th id="header">Monthly price</th><td id="cell">Twenty dollars</td></tr></table>
+          </main>
+        `;
+
+        for (const selector of ['#label', '#summary', '#header', '#cell']) {
+          assert(unitizer.findReadableLabelTarget(
+            document.querySelector(selector),
+            options
+          )?.id === selector.slice(1), `${selector} was not retained as a semantic target`);
+        }
+      });
+
+      test('complex controls produce one natural-language label host', () => {
+        document.body.innerHTML = `
+          <nav>
+            <a id="home-control" href="/home">
+              <div class="icon-shell">
+                <svg aria-hidden="true"><path d="M0 0h12v12z"></path></svg>
+              </div>
+              <div class="control-content">
+                <span id="home-label">
+                  <span>Creator</span>
+                  <span>studio</span>
+                </span>
+                <span id="home-status" role="status">Live</span>
+                <span id="home-count" class="notification-badge">12</span>
+                <time id="home-time" datetime="2026-11-19T00:00:00Z">2h</time>
+              </div>
+            </a>
+            <button id="notification-control" type="button">
+              <div class="icon-shell">
+                <svg aria-hidden="true"><path d="M0 0h12v12z"></path></svg>
+              </div>
+              <div class="control-content">
+                <span id="notification-label">
+                  <span>Notifications</span>
+                </span>
+                <span id="notification-count" data-testid="notification-count">5</span>
+              </div>
+            </button>
+          </nav>
+        `;
+
+        const homeControl = document.querySelector('#home-control');
+        const homeTarget = unitizer.findControlTranslationTarget(
+          homeControl,
+          options
+        );
+        const notificationTarget = unitizer.findControlTranslationTarget(
+          document.querySelector('#notification-control'),
+          options
+        );
+
+        assert(homeTarget?.id === 'home-label',
+          `expected the complete Home label host, got #${homeTarget?.id || ''}`);
+        assert(unitizer.normalizeText(homeTarget.textContent) === 'Creator studio',
+          'nested natural-language spans were not aggregated in DOM order');
+        assert(notificationTarget?.id === 'notification-label',
+          `expected the Notifications label host, got #${notificationTarget?.id || ''}`);
+        for (const excluded of [
+          '#home-control',
+          '#home-status',
+          '#home-count',
+          '#home-time',
+          '#notification-control',
+          '#notification-count'
+        ]) {
+          assert(homeTarget !== document.querySelector(excluded)
+              && notificationTarget !== document.querySelector(excluded),
+          `control unitization selected auxiliary node ${excluded}`);
+        }
+        assert(homeTarget.closest('a') === homeControl,
+          'control label host detached from its anchor');
+        assert(homeControl.getAttribute('href') === '/home',
+          'control unitization changed the anchor href');
+      });
+
+      test('controls with only auxiliary text do not produce translation hosts', () => {
+        document.body.innerHTML = `
+          <button id="counter" type="button">
+            <svg aria-hidden="true"><path d="M0 0h12v12z"></path></svg>
+            <span class="badge">99+</span>
+          </button>
+          <a id="timestamp" href="/status/1"><time datetime="2026-11-19">2h</time></a>
+        `;
+
+        assert(unitizer.findControlTranslationTarget(
+          document.querySelector('#counter'),
+          options
+        ) === null, 'numeric badge control produced a translation host');
+        assert(unitizer.findControlTranslationTarget(
+          document.querySelector('#timestamp'),
+          options
+        ) === null, 'timestamp-only control produced a translation host');
+      });
+
+      test('rendered labels win over hidden icon or status text', () => {
+        document.body.innerHTML = `
+          <a id="nested-control" href="/home"
+             style="display:flex;width:180px;height:38px;overflow:hidden">
+            <span style="display:none">Icon</span>
+            <div><div><span id="nested-label">Home</span></div></div>
+            <span class="badge">7</span>
+          </a>
+          <button id="status-control" type="button"
+                  style="display:flex;width:180px;height:38px">
+            <span aria-hidden="true">H</span>
+            <span id="status-label">Notifications</span>
+            <span role="status">Live</span>
+          </button>
+        `;
+
+        assert(unitizer.findControlTranslationTarget(
+          document.querySelector('#nested-control'),
+          options
+        )?.id === 'nested-label',
+        'hidden icon text was selected instead of the deepest visible label');
+        assert(unitizer.findControlTranslationTarget(
+          document.querySelector('#status-control'),
+          options
+        )?.id === 'status-label',
+        'aria-hidden glyph was selected instead of the visible label');
+      });
+
+      const failures = [];
+      for (const item of tests) {
+        try {
+          item.fn();
+        } catch (error) {
+          failures.push({ name: item.name, error: error.stack || error.message });
+        }
+      }
+      return { total: tests.length, failures };
+    };
+  </script>
+</body>
+</html>

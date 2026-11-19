@@ -1,0 +1,336 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Content UI policy browser tests</title>
+</head>
+<body>
+  <script src="../shared/content-ui-policy.js"></script>
+  <script>
+    window.runContentUiPolicyTests = () => {
+      const policy = window.OITContentUiPolicy;
+      const tests = [];
+      const assert = (condition, message) => {
+        if (!condition) throw new Error(message);
+      };
+      const test = (name, fn) => tests.push({ name, fn });
+
+      test('adaptive roots and labels share one public selector contract', () => {
+        assert(policy, 'content UI policy did not initialize');
+        assert(typeof policy.ADAPTIVE_UI_ROOT_SELECTOR === 'string',
+          'adaptive root selector is unavailable');
+        assert(typeof policy.INTERACTIVE_CONTROL_SELECTOR === 'string',
+          'interactive control selector is unavailable');
+
+        document.body.innerHTML = `
+          <header id="header">
+            <nav id="nav" role="navigation">
+              <a id="link-label" href="/home"><span id="link-text">Home</span></a>
+            </nav>
+          </header>
+          <main><p>Readable article prose.</p></main>
+        `;
+
+        assert(policy.isAdaptiveUiRoot(document.querySelector('#nav')),
+          'navigation root was not recognized');
+        assert(policy.isWithinAdaptiveUiScope(document.querySelector('#link-text')),
+          'navigation label was outside the adaptive UI scope');
+        assert(policy.isAdaptiveUiLabel(document.querySelector('#link-text')),
+          'link label was not recognized as an adaptive UI label');
+      });
+
+      test('metadata and controls outside adaptive navigation are excluded', () => {
+        document.body.innerHTML = `
+          <main>
+            <article>
+              <a id="article-link" href="/story">A linked story title</a>
+              <button id="article-button" type="button">Read more</button>
+              <time id="timestamp" datetime="2026-11-19T00:00:00Z">2h</time>
+            </article>
+          </main>
+          <aside id="sidebar"><button id="sidebar-button">Related</button></aside>
+        `;
+
+        for (const selector of [
+          '#article-link',
+          '#article-button',
+          '#timestamp',
+          '#sidebar-button'
+        ]) {
+          assert(!policy.isAdaptiveUiLabel(document.querySelector(selector)),
+            `${selector} was incorrectly classified as adaptive navigation`);
+        }
+      });
+
+      test('visible non-semantic navigation collections are recognized without opening article controls', () => {
+        document.body.innerHTML = `
+          <div id="app-shell">
+            <div id="left-rail" style="display:block;width:220px">
+              <a id="rail-home" href="/home" style="display:block;width:200px;height:32px">
+                <span id="rail-home-label">Home</span>
+              </a>
+              <a id="rail-explore" href="/explore" style="display:block;width:200px;height:32px">
+                <span id="rail-explore-label">Explore</span>
+              </a>
+              <a id="rail-notifications" href="/notifications" style="display:block;width:200px;height:32px">
+                <span id="rail-notifications-label">Notifications</span>
+              </a>
+              <a id="rail-messages" href="/messages" style="display:block;width:200px;height:32px">
+                <span id="rail-messages-label">Messages</span>
+              </a>
+            </div>
+            <main>
+              <article>
+                <p>The article contains enough readable prose to remain the primary content surface.</p>
+                <div id="share-row">
+                  <a id="share-one" href="/share/one" style="display:block">Share</a>
+                  <a id="share-two" href="/share/two" style="display:block">Copy link</a>
+                  <a id="share-three" href="/share/three" style="display:block">Open menu</a>
+                </div>
+              </article>
+            </main>
+          </div>
+        `;
+
+        const roots = policy.findAdaptiveUiRoots(document.body, {
+          isVisible: element => {
+            const rect = element.getBoundingClientRect();
+            return rect.width > 0 && rect.height > 0;
+          }
+        });
+        const rail = document.querySelector('#left-rail');
+        const label = document.querySelector('#rail-home-label');
+
+        assert(roots.includes(rail),
+          'non-semantic persistent navigation rail was not discovered');
+        assert(policy.isWithinAdaptiveUiScope(label, roots),
+          'rail label was outside the discovered adaptive UI scope');
+        assert(policy.isAdaptiveUiLabel(label, roots),
+          'rail label was not recognized as an adaptive UI label');
+        assert(!roots.some(root => root.closest?.('article')),
+          'article interaction group was incorrectly opened as navigation');
+      });
+
+      test('visible non-semantic horizontal menus are recognized as persistent navigation', () => {
+        document.body.innerHTML = `
+          <div id="topbar-shell">
+            <div id="topbar" style="display:flex;width:720px;height:40px">
+              <a id="top-home" href="/home" style="display:block;width:140px;height:32px">
+                <span>Home</span>
+              </a>
+              <a id="top-explore" href="/explore" style="display:block;width:150px;height:32px">
+                <span>Explore</span>
+              </a>
+              <a id="top-notifications" href="/notifications" style="display:block;width:180px;height:32px">
+                <span>Notifications</span>
+              </a>
+              <a id="top-messages" href="/messages" style="display:block;width:160px;height:32px">
+                <span>Messages</span>
+              </a>
+            </div>
+            <main>
+              <article>
+                <p>The article remains separate from the persistent horizontal page controls.</p>
+              </article>
+            </main>
+          </div>
+        `;
+
+        const roots = policy.findAdaptiveUiRoots(document.body, {
+          isVisible: element => {
+            const rect = element.getBoundingClientRect();
+            return rect.width > 0 && rect.height > 0;
+          }
+        });
+        const topbar = document.querySelector('#topbar');
+        const label = topbar.querySelector('#top-explore span');
+
+        assert(roots.includes(topbar),
+          'non-semantic horizontal navigation menu was not discovered');
+        assert(policy.isAdaptiveUiLabel(label, roots),
+          'horizontal menu label was not recognized as adaptive navigation');
+      });
+
+      test('compact two-control tab clusters are recognized without a semantic parent', () => {
+        document.body.innerHTML = `
+          <main>
+            <div id="compact-tabs" style="display:flex;width:360px;height:40px">
+              <a id="compact-for-you" role="tab" href="/home"
+                 style="display:block;width:170px;height:32px">
+                <span id="compact-for-you-label">For you</span>
+              </a>
+              <a id="compact-following" role="tab" href="/following"
+                 style="display:block;width:170px;height:32px">
+                <span id="compact-following-label">Following</span>
+              </a>
+            </div>
+            <article>
+              <p>Readable article prose remains separate from the compact tab controls.</p>
+            </article>
+          </main>
+        `;
+
+        const roots = policy.findAdaptiveUiRoots(document.body, {
+          isVisible: element => {
+            const rect = element.getBoundingClientRect();
+            return rect.width > 0 && rect.height > 0;
+          }
+        });
+        const tabs = document.querySelector('#compact-tabs');
+
+        assert(roots.includes(tabs),
+          'compact two-control tab cluster was not discovered');
+        assert(policy.isAdaptiveUiLabel(
+          document.querySelector('#compact-following-label'),
+          roots
+        ), 'compact tab label was not recognized as adaptive navigation');
+      });
+
+      test('same-path ARIA-selected controls form a navigation cluster without tab roles', () => {
+        document.body.innerHTML = `
+          <main>
+            <div id="aria-state-tabs" style="display:flex;width:360px;height:40px">
+              <a id="aria-state-for-you" aria-selected="true" href="/home"
+                 style="display:block;width:170px;height:32px">
+                <span id="aria-state-for-you-label">For you</span>
+              </a>
+              <a id="aria-state-following" aria-selected="false" href="/home"
+                 style="display:block;width:170px;height:32px">
+                <span id="aria-state-following-label">Following</span>
+              </a>
+            </div>
+            <article>
+              <p>Readable article prose remains separate from stateful page tabs.</p>
+            </article>
+          </main>
+        `;
+
+        const roots = policy.findAdaptiveUiRoots(document.body, {
+          isVisible: element => {
+            const rect = element.getBoundingClientRect();
+            return rect.width > 0 && rect.height > 0;
+          }
+        });
+        const tabs = document.querySelector('#aria-state-tabs');
+
+        assert(roots.includes(tabs),
+          'same-path ARIA-selected tab cluster was not discovered');
+        assert(policy.isAdaptiveUiLabel(
+          document.querySelector('#aria-state-following-label'),
+          roots
+        ), 'same-path ARIA-selected tab label was not recognized as navigation');
+      });
+
+      test('compact action pairs inside article content remain content controls', () => {
+        document.body.innerHTML = `
+          <main>
+            <article>
+              <div id="article-actions" style="display:flex;width:320px;height:40px">
+                <button id="article-overview" role="tab" type="button"
+                        aria-selected="true"
+                        style="display:block;width:150px;height:32px">Overview</button>
+                <button id="article-details" type="button" aria-selected="false"
+                        style="display:block;width:150px;height:32px">Details</button>
+              </div>
+              <p>The article body is readable and distinct from its local view controls.</p>
+            </article>
+          </main>
+        `;
+
+        const roots = policy.findAdaptiveUiRoots(document.body, {
+          isVisible: element => {
+            const rect = element.getBoundingClientRect();
+            return rect.width > 0 && rect.height > 0;
+          }
+        });
+
+        assert(!roots.includes(document.querySelector('#article-actions')),
+          'article-local action pair was incorrectly opened as navigation');
+      });
+
+      test('button-only persistent toolbars are recognized outside article content', () => {
+        document.body.innerHTML = `
+          <div id="app-toolbar" style="display:flex;width:420px;height:44px">
+            <button id="toolbar-compose" type="button"
+                    style="display:block;width:130px;height:34px">Compose</button>
+            <button id="toolbar-account" type="button"
+                    style="display:block;width:140px;height:34px">Account</button>
+            <button id="toolbar-more" type="button"
+                    style="display:block;width:120px;height:34px">More</button>
+          </div>
+          <main>
+            <article>
+              <p>The article body remains independent from persistent account actions.</p>
+            </article>
+          </main>
+        `;
+
+        const roots = policy.findAdaptiveUiRoots(document.body, {
+          isVisible: element => {
+            const rect = element.getBoundingClientRect();
+            return rect.width > 0 && rect.height > 0;
+          }
+        });
+
+        assert(roots.includes(document.querySelector('#app-toolbar')),
+          'button-only persistent toolbar was not discovered');
+        assert(policy.isAdaptiveUiLabel(
+          document.querySelector('#toolbar-account'),
+          roots
+        ), 'button-only toolbar label was not recognized as adaptive navigation');
+      });
+
+      test('irrelevant controls before navigation do not exhaust discovery limits', () => {
+        const links = Array.from({ length: 520 }, (_, index) => (
+          `<a href="/story/${index}" style="display:block;width:420px;height:20px">Story ${index}</a>`
+        )).join('');
+        document.body.innerHTML = `
+          <main>
+            <article id="long-feed">${links}</article>
+          </main>
+          <div id="late-toolbar" style="display:flex;width:420px;height:44px">
+            <a href="/activity" style="display:block;width:130px;height:34px">Activity</a>
+            <a href="/settings" style="display:block;width:140px;height:34px">Settings</a>
+            <button id="late-help" type="button"
+                    style="display:block;width:120px;height:34px">Help</button>
+          </div>
+        `;
+
+        const roots = policy.findAdaptiveUiRoots(document.body, {
+          isVisible: element => {
+            const rect = element.getBoundingClientRect();
+            return rect.width > 0 && rect.height > 0;
+          }
+        });
+
+        assert(roots.includes(document.querySelector('#late-toolbar')),
+          'navigation after 500 article controls was not discovered');
+        assert(policy.isAdaptiveUiLabel(
+          document.querySelector('#late-help'),
+          roots
+        ), 'late navigation control was outside the discovered adaptive scope');
+      });
+
+      test('menus revealed through composed custom elements are recognized', () => {
+        document.body.innerHTML = '<site-toolbar id="host"></site-toolbar>';
+        const shadowRoot = document.querySelector('#host').attachShadow({ mode: 'open' });
+        shadowRoot.innerHTML = '<nav><a id="shadow-label" href="/settings">Settings</a></nav>';
+        const label = shadowRoot.querySelector('#shadow-label');
+
+        assert(policy.isAdaptiveUiLabel(label),
+          'shadow navigation label was not recognized across the composed tree');
+      });
+
+      const failures = [];
+      for (const item of tests) {
+        try {
+          item.fn();
+        } catch (error) {
+          failures.push({ name: item.name, error: error.stack || error.message });
+        }
+      }
+      return { total: tests.length, failures };
+    };
+  </script>
+</body>
+</html>

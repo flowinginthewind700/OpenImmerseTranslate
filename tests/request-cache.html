@@ -1,0 +1,298 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Request cache browser tests</title>
+</head>
+<body>
+  <script src="../shared/prompt-policy.js"></script>
+  <script src="../shared/request-cache.js"></script>
+  <script>
+    window.runRequestCacheTests = async () => {
+      const api = window.OITRequestCache;
+      const tests = [];
+      const assert = (condition, message) => {
+        if (!condition) throw new Error(message);
+      };
+      const test = (name, fn) => tests.push({ name, fn });
+      const expectRejection = async (promise, message) => {
+        try {
+          await promise;
+        } catch (error) {
+          return error;
+        }
+        throw new Error(message);
+      };
+      const flushMicrotasks = () => Promise.resolve().then(() => Promise.resolve());
+
+      test('translation cache keys isolate every output-affecting input', () => {
+        assert(api, 'request cache module did not load');
+        const cache = api.createRequestCache();
+        const base = {
+          texts: ['Read <strong>this</strong> now.'],
+          config: {
+            provider: 'openai',
+            apiEndpoint: 'https://api.openai.com/v1/chat/completions',
+            modelName: 'gpt-4o-mini',
+            sourceLang: 'en',
+            targetLang: 'zh-CN',
+            translationStyle: 'accurate',
+            autoDetect: true,
+            customPrompt: '',
+            maxTokens: 2048,
+            temperature: 0.3
+          },
+          context: {
+            scene: 'page',
+            title: 'A title',
+            surroundingText: 'Nearby context',
+            itemContexts: ['Heading trail: Intro']
+          }
+        };
+        const key = cache.buildTranslationCacheKey(base);
+
+        assert(key === cache.buildTranslationCacheKey({
+          ...base,
+          context: {
+            ...base.context,
+            title: '  A   title ',
+            surroundingText: ' Nearby   context '
+          }
+        }), 'equivalent normalized context changed the cache key');
+
+        const variants = [
+          { texts: ['Read <em>this</em> now.'] },
+          { config: { ...base.config, modelName: 'gpt-5-mini' } },
+          { config: { ...base.config, targetLang: 'ja' } },
+          { config: { ...base.config, translationStyle: 'formal' } },
+          { config: { ...base.config, autoDetect: false } },
+          { config: { ...base.config, customPrompt: 'Use product glossary terms.' } },
+          { context: { ...base.context, scene: 'selection' } },
+          { context: { ...base.context, itemContexts: ['Heading trail: Billing'] } },
+          { promptPolicyVersion: 'future-policy' }
+        ];
+        for (const variant of variants) {
+          assert(cache.buildTranslationCacheKey({ ...base, ...variant }) !== key,
+            'an output-affecting input did not change the cache key');
+        }
+      });
+
+      test('an already-aborted waiter is rejected before cache lookup', async () => {
+        const cache = api.createRequestCache();
+        let loads = 0;
+        await cache.getOrLoad('pre-abort', async () => {
+          loads++;
+          return ['cached'];
+        });
+
+        const controller = new AbortController();
+        controller.abort();
+        const error = await expectRejection(cache.getOrLoad('pre-abort', async () => {
+          loads++;
+          return ['unexpected'];
+        }, { signal: controller.signal }), 'aborted waiter unexpectedly received cached data');
+
+        assert(error.name === 'AbortError', 'aborted waiter returned the wrong error type');
+        assert(loads === 1, 'aborted waiter started or reloaded a request');
+        assert(cache.stats().cancelled === 1, 'aborted waiter was not observable');
+      });
+
+      test('protected token nonces are canonicalized but token order remains significant', () => {
+        const cache = api.createRequestCache();
+        const config = { targetLang: 'en' };
+        const first = cache.buildTranslationCacheKey({
+          texts: ['[[OIT-AAA:OPEN:1]]Name[[OIT-AAA:CLOSE:2]]'],
+          config
+        });
+        const sameShape = cache.buildTranslationCacheKey({
+          texts: ['[[OIT-BBB:OPEN:8]]Name[[OIT-BBB:CLOSE:9]]'],
+          config
+        });
+        const differentShape = cache.buildTranslationCacheKey({
+          texts: ['[[OIT-CCC:CLOSE:2]]Name[[OIT-CCC:OPEN:1]]'],
+          config
+        });
+
+        assert(first === sameShape, 'protected token nonces prevented cache reuse');
+        assert(first !== differentShape, 'protected token order was omitted from the cache key');
+      });
+
+      test('successful results are cloned on cache hits', async () => {
+        const cache = api.createRequestCache();
+        let loads = 0;
+        const load = async () => {
+          loads++;
+          return { translations: ['translated'] };
+        };
+
+        const first = await cache.getOrLoad('same', load);
+        first.translations[0] = 'mutated by caller';
+        const second = await cache.getOrLoad('same', load);
+
+        assert(loads === 1, `cache miss count was ${loads}`);
+        assert(second.translations[0] === 'translated',
+          'cache hit leaked a caller mutation into stored data');
+        assert(cache.stats().hits === 1, 'cache hit was not observable');
+      });
+
+      test('concurrent requests with the same key share one real load', async () => {
+        const cache = api.createRequestCache();
+        let loads = 0;
+        let release;
+        const gate = new Promise(resolve => {
+          release = resolve;
+        });
+        const load = async () => {
+          loads++;
+          await gate;
+          return ['translated'];
+        };
+
+        const first = cache.getOrLoad('shared', load);
+        const second = cache.getOrLoad('shared', load);
+        await flushMicrotasks();
+        assert(loads === 1, `concurrent requests performed ${loads} loads`);
+        release();
+
+        const results = await Promise.all([first, second]);
+        assert(results[0][0] === 'translated' && results[1][0] === 'translated',
+          'shared request did not resolve every waiter');
+        assert(cache.stats().shared === 1, 'shared request was not observable');
+      });
+
+      test('failed and empty loads are never cached', async () => {
+        const cache = api.createRequestCache();
+        let failures = 0;
+        await expectRejection(cache.getOrLoad('failure', async () => {
+          failures++;
+          throw new Error('provider failed');
+        }), 'failed load unexpectedly resolved');
+
+        const retry = await cache.getOrLoad('failure', async () => {
+          failures++;
+          return ['recovered'];
+        });
+        assert(retry[0] === 'recovered' && failures === 2,
+          'failed request polluted the cache');
+
+        const empty = await cache.getOrLoad('empty', async () => null);
+        assert(empty === null, 'null result changed');
+        assert(cache.get('empty') === undefined, 'null result was cached');
+      });
+
+      test('one waiter cancellation does not abort a shared request needed by another waiter', async () => {
+        const cache = api.createRequestCache();
+        const firstController = new AbortController();
+        const secondController = new AbortController();
+        let observedSignal = null;
+        let release;
+        const gate = new Promise(resolve => {
+          release = resolve;
+        });
+        const load = async ({ signal }) => {
+          observedSignal = signal;
+          await gate;
+          return ['shared'];
+        };
+
+        const first = cache.getOrLoad('abort-shared', load, {
+          signal: firstController.signal
+        });
+        const second = cache.getOrLoad('abort-shared', load, {
+          signal: secondController.signal
+        });
+        await flushMicrotasks();
+        firstController.abort();
+        await expectRejection(first, 'cancelled waiter unexpectedly resolved');
+        assert(observedSignal && !observedSignal.aborted,
+          'one cancelled waiter aborted the shared provider request');
+
+        release();
+        assert((await second)[0] === 'shared', 'remaining waiter did not receive the result');
+        assert(cache.get('abort-shared')?.[0] === 'shared',
+          'successful shared result was not cached');
+      });
+
+      test('an all-waiter cancellation aborts the load and does not cache cancellation', async () => {
+        const cache = api.createRequestCache();
+        const controller = new AbortController();
+        let observedSignal = null;
+        const load = ({ signal }) => {
+          observedSignal = signal;
+          return new Promise((resolve, reject) => {
+            signal.addEventListener('abort', () => {
+              const error = new Error('aborted');
+              error.name = 'AbortError';
+              reject(error);
+            }, { once: true });
+          });
+        };
+
+        const request = cache.getOrLoad('abort-all', load, {
+          signal: controller.signal
+        });
+        await flushMicrotasks();
+        controller.abort();
+        await expectRejection(request, 'cancelled request unexpectedly resolved');
+        assert(observedSignal?.aborted, 'shared provider request was not aborted');
+        assert(cache.get('abort-all') === undefined,
+          'cancelled request polluted the cache');
+      });
+
+      test('TTL expiration removes stale entries', async () => {
+        let now = 1000;
+        const cache = api.createRequestCache({
+          ttlMs: 50,
+          now: () => now
+        });
+        let loads = 0;
+        const load = async () => {
+          loads++;
+          return [loads];
+        };
+
+        await cache.getOrLoad('ttl', load);
+        now = 1049;
+        await cache.getOrLoad('ttl', load);
+        assert(loads === 1, 'entry expired before its TTL');
+        now = 1050;
+        await cache.getOrLoad('ttl', load);
+        assert(loads === 2, 'entry was served after its TTL');
+        assert(cache.stats().expired === 1, 'TTL expiration was not observable');
+      });
+
+      test('bounded LRU evicts the least recently used entry', async () => {
+        const cache = api.createRequestCache({ maxEntries: 2 });
+        let loads = 0;
+        const load = async value => {
+          loads++;
+          return [value];
+        };
+
+        await cache.getOrLoad('a', () => load('a'));
+        await cache.getOrLoad('b', () => load('b'));
+        assert(cache.get('a')?.[0] === 'a', 'LRU setup could not access first entry');
+        await cache.getOrLoad('c', () => load('c'));
+
+        assert(cache.get('b') === undefined, 'least recently used entry was not evicted');
+        assert(cache.get('a')?.[0] === 'a' && cache.get('c')?.[0] === 'c',
+          'recent entries were not retained');
+        assert(cache.stats().evictions === 1, 'LRU eviction was not observable');
+
+        await cache.getOrLoad('b', () => load('b'));
+        assert(loads === 4, 'evicted entry was not reloaded');
+      });
+
+      const failures = [];
+      for (const item of tests) {
+        try {
+          await item.fn();
+        } catch (error) {
+          failures.push({ name: item.name, error: error.stack || error.message });
+        }
+      }
+      return { total: tests.length, failures };
+    };
+  </script>
+</body>
+</html>

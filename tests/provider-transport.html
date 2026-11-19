@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Provider transport browser tests</title>
+</head>
+<body>
+  <script src="../shared/prompt-policy.js"></script>
+  <script src="../shared/translation-core.js"></script>
+  <script src="../shared/model-policy.js"></script>
+  <script src="../background/rate-limiter.js"></script>
+  <script src="../shared/request-timeout.js"></script>
+  <script src="../background/provider-transport.js"></script>
+  <script>
+    window.runProviderTransportTests = async () => {
+      const modelPolicy = window.OITModelPolicy;
+      const translationCore = window.OITTranslationCore;
+      const rateLimiterApi = window.OITRateLimiter;
+      const tests = [];
+      const assert = (condition, message) => {
+        if (!condition) throw new Error(message);
+      };
+      const test = (name, fn) => tests.push({ name, fn });
+      const expectRejection = async (promise, message) => {
+        try {
+          await promise;
+        } catch (error) {
+          return error;
+        }
+        throw new Error(message);
+      };
+      const expectRejectionWithin = async (factory, timeoutMs, message) => {
+        let timer = null;
+        try {
+          return await Promise.race([
+            Promise.resolve().then(factory).then(
+              value => {
+                throw new Error('request unexpectedly resolved with a value');
+              },
+              error => error
+            ),
+            new Promise((_, reject) => {
+              timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+            })
+          ]);
+        } finally {
+          if (timer !== null) clearTimeout(timer);
+        }
+      };
+      const createLimiter = () => ({
+        active: 0,
+        acquisitions: 0,
+        releases: 0,
+        async acquire(signal) {
+          if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+          this.active++;
+          this.acquisitions++;
+        },
+        release() {
+          this.active--;
+          this.releases++;
+        }
+      });
+      const jsonResponse = (body, status = 200) => new Response(
+        JSON.stringify(body),
+        {
+          status,
+          headers: { 'Content-Type': 'application/json' }
+        }
+      );
+
+      test('LLM transport dispatches and parses provider-native responses', async () => {
+        let request = null;
+        const transport = window.OITProviderTransport.createProviderTransport({
+          modelPolicy,
+          translationCore,
+          rateLimiter: createLimiter(),
+          rateLimiterApi,
+          fetchImpl: async (url, options) => {
+            request = { url, options };
+            return jsonResponse({
+              choices: [{ message: { content: '["translated"]' } }]
+            });
+          }
+        });
+
+        const content = await transport.requestLlmContent('system', 'user', {
+          provider: 'openai',
+          apiEndpoint: 'https://api.openai.com/v1/chat/completions',
+          apiKey: 'secret',
+          modelName: 'gpt-4o-mini'
+        });
+
+        assert(content === '["translated"]', 'provider response was not parsed through policy');
+        assert(request.url === 'https://api.openai.com/v1/chat/completions',
+          'request endpoint was not preserved');
+        assert(JSON.parse(request.options.body).messages[1].content === 'user',
+          'request user prompt was not serialized');
+      });
+
+      test('HTTP failures preserve provider, status, and response message', async () => {
+        const transport = window.OITProviderTransport.createProviderTransport({
+          modelPolicy,
+          translationCore,
+          rateLimiter: createLimiter(),
+          rateLimiterApi,
+          fetchImpl: async () => jsonResponse({
+            error: { message: 'invalid credential' }
+          }, 401)
+        });
+
+        const error = await expectRejection(transport.requestLlmContent(
+          'system',
+          'user',
+          {
+            provider: 'openai',
+            apiEndpoint: 'https://api.openai.com/v1/chat/completions',
+            modelName: 'gpt-4o-mini'
+          }
+        ), 'HTTP failure unexpectedly resolved');
+
+        assert(error.status === 401, 'HTTP status was not exposed');
+        assert(error.message.includes('openai') && error.message.includes('invalid credential'),
+          `provider error lost context: ${error.message}`);
+      });
+
+      test('Google translation skips non-translatable values without a network request', async () => {
+        let calls = 0;
+        const limiter = createLimiter();
+        const transport = window.OITProviderTransport.createProviderTransport({
+          modelPolicy,
+          translationCore,
+          rateLimiter: limiter,
+          rateLimiterApi,
+          fetchImpl: async () => {
+            calls++;
+            return jsonResponse([[['unexpected']]]);
+          }
+        });
+
+        const results = await transport.translateGoogleTexts(
+          ['https://example.com', '...'],
+          { sourceLang: 'auto', targetLang: 'zh-CN', autoDetect: false }
+        );
+
+        assert(results[0] === 'https://example.com' && results[1] === '...',
+          'skipped Google values changed');
+        assert(calls === 0 && limiter.acquisitions === 0,
+          'skipped Google values reached the transport layer');
+      });
+
+      test('Google cancellation throws instead of returning a partial success', async () => {
+        const controller = new AbortController();
+        let calls = 0;
+        const transport = window.OITProviderTransport.createProviderTransport({
+          modelPolicy,
+          translationCore,
+          rateLimiter: createLimiter(),
+          rateLimiterApi,
+          fetchImpl: async () => {
+            calls++;
+            controller.abort();
+            return jsonResponse([[['第一段']]]);
+          }
+        });
+
+        const error = await expectRejection(transport.translateGoogleTexts(
+          ['First paragraph', 'Second paragraph'],
+          { sourceLang: 'en', targetLang: 'zh-CN', autoDetect: false },
+          controller.signal
+        ), 'cancelled Google batch returned partial results');
+
+        assert(error.name === 'AbortError', 'Google cancellation returned the wrong error type');
+        assert(calls === 1, `cancelled Google batch made ${calls} requests`);
+      });
+
+      test('LLM transport bounds a fetch that never settles', async () => {
+        let fetchSignal = null;
+        const transport = window.OITProviderTransport.createProviderTransport({
+          modelPolicy,
+          translationCore,
+          rateLimiter: createLimiter(),
+          rateLimiterApi,
+          requestTimeoutMs: 40,
+          fetchImpl: async (url, options) => {
+            fetchSignal = options.signal;
+            return new Promise(() => {});
+          }
+        });
+
+        const error = await expectRejectionWithin(
+          () => transport.requestLlmContent('system', 'user', {
+            provider: 'openai',
+            apiEndpoint: 'https://api.openai.com/v1/chat/completions',
+            apiKey: 'secret',
+            modelName: 'gpt-4o-mini'
+          }),
+          300,
+          'hung provider fetch did not settle'
+        );
+
+        assert(error.name === 'TimeoutError',
+          `hung provider fetch rejected as ${error.name}`);
+        assert(fetchSignal?.aborted === true,
+          'provider timeout did not abort the fetch signal');
+      });
+
+      const failures = [];
+      for (const item of tests) {
+        try {
+          await item.fn();
+        } catch (error) {
+          failures.push({ name: item.name, error: error.stack || error.message });
+        }
+      }
+      return { total: tests.length, failures };
+    };
+  </script>
+</body>
+</html>

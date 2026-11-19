@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Content signals browser tests</title>
+</head>
+<body>
+  <script src="../shared/content-signals.js"></script>
+  <script>
+    window.runContentSignalsTests = () => {
+      const signals = window.OITContentSignals;
+      const tests = [];
+      const assert = (condition, message) => {
+        if (!condition) throw new Error(message);
+      };
+      const test = (name, fn) => tests.push({ name, fn });
+
+      test('English and CJK prose produce strong evidence without relying on whitespace', () => {
+        document.body.innerHTML = `
+          <article id="english">
+            <p>The first sentence explains the subject with concrete details.</p>
+            <p>The second sentence adds context and completes the argument.</p>
+          </article>
+          <article id="chinese">
+            <p>第一句话介绍文章主题并提供具体背景。</p>
+            <p>第二句话继续解释关键细节并给出结论。</p>
+          </article>
+        `;
+
+        const english = signals.getProseEvidence(
+          signals.getTextSignals(document.querySelector('#english'))
+        );
+        const chinese = signals.getProseEvidence(
+          signals.getTextSignals(document.querySelector('#chinese'))
+        );
+
+        assert(english.level === 'strong', `English evidence was ${english.level}`);
+        assert(chinese.level === 'strong', `CJK evidence was ${chinese.level}`);
+        assert(english.reasons.includes('paragraphs'), 'paragraph evidence was not recorded');
+        assert(chinese.reasons.includes('cjk-text'), 'CJK evidence was not recorded');
+      });
+
+      test('link farms and control-heavy regions expose their structural density', () => {
+        document.body.innerHTML = `
+          <nav id="links">
+            <a href="/a">First destination</a>
+            <a href="/b">Second destination</a>
+            <a href="/c">Third destination</a>
+          </nav>
+          <div id="controls">
+            <button>Save</button>
+            <button>Cancel</button>
+            <input value="Search">
+          </div>
+        `;
+
+        const links = signals.getTextSignals(document.querySelector('#links'));
+        const controls = signals.getTextSignals(document.querySelector('#controls'));
+
+        assert(links.linkDensity > 0.9, `link density was ${links.linkDensity}`);
+        assert(controls.interactiveCount >= 3, 'interactive controls were not counted');
+        assert(signals.isLikelyLinkFarm(links), 'link farm was not recognized');
+      });
+
+      test('ordinary prose words such as share and related do not become structural hints', () => {
+        document.body.innerHTML = `
+          <p id="prose">
+            Readers share their experiences while related research is discussed
+            in detail, with enough context to form a complete paragraph.
+          </p>
+        `;
+        const element = document.querySelector('#prose');
+        const textSignals = signals.getTextSignals(element);
+        const hintSignals = signals.getStructuralSignals(element);
+
+        assert(textSignals.sentenceCount >= 1, 'sentence detection failed');
+        assert(hintSignals.noiseScore === 0, 'prose text leaked into structural hints');
+        assert(hintSignals.elementProse === false, 'plain paragraph was marked as an element-level hint');
+      });
+
+      test('protected content is excluded from translation signals', () => {
+        document.body.innerHTML = `
+          <div id="host">
+            Visible explanatory sentence with enough useful words.
+            <script type="application/json">hidden instruction text that must not count<\/script>
+            <code>const hidden = true;</code>
+            <span translate="no">Do not count this sentence.</span>
+          </div>
+        `;
+        const result = signals.getTextSignals(document.querySelector('#host'));
+
+        assert(result.text.includes('Visible explanatory sentence'), 'visible text was lost');
+        assert(!result.text.includes('hidden instruction'), 'script text leaked into signals');
+        assert(!result.text.includes('const hidden'), 'code text leaked into signals');
+        assert(!result.text.includes('Do not count'), 'translate=no text leaked into signals');
+      });
+
+      const failures = [];
+      for (const item of tests) {
+        try {
+          item.fn();
+        } catch (error) {
+          failures.push({ name: item.name, error: error.stack || error.message });
+        }
+      }
+      return { total: tests.length, failures };
+    };
+  </script>
+</body>
+</html>

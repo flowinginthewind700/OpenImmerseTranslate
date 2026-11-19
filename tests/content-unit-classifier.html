@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Content unit classifier browser tests</title>
+</head>
+<body>
+  <script src="../shared/content-signals.js"></script>
+  <script src="../shared/content-unit-classifier.js"></script>
+  <script>
+    window.runContentUnitClassifierTests = () => {
+      const classifier = window.OITContentUnitClassifier;
+      const tests = [];
+      const assert = (condition, message) => {
+        if (!condition) throw new Error(message);
+      };
+      const test = (name, fn) => tests.push({ name, fn });
+      const classify = (selector, options = {}) => classifier.classifyContentUnit(
+        document.querySelector(selector),
+        options
+      );
+
+      test('headings, subtitles, and paragraphs receive distinct saturated roles', () => {
+        document.body.innerHTML = `
+          <article>
+            <h1 id="title">Complete guide to local models</h1>
+            <p id="subtitle" class="article-subtitle">A practical introduction for engineering teams</p>
+            <p id="body">This paragraph contains multiple details and enough prose
+              to be classified as ordinary reading content.</p>
+          </article>
+        `;
+
+        const title = classify('#title');
+        const subtitle = classify('#subtitle');
+        const body = classify('#body');
+
+        assert(title.kind === 'title', `heading kind was ${title.kind}`);
+        assert(subtitle.kind === 'subtitle', `subtitle kind was ${subtitle.kind}`);
+        assert(body.kind === 'paragraph', `body kind was ${body.kind}`);
+        assert(title.confidence >= 0.9 && subtitle.confidence >= 0.7,
+          'title confidence is not saturated');
+      });
+
+      test('content cards and forum entries are recognizable without treating metadata as content', () => {
+        document.body.innerHTML = `
+          <a id="card" class="story-card" href="/story">
+            <div class="card-title">How teams deploy models safely</div>
+            <p class="card-summary">A short explanation of the deployment workflow.</p>
+          </a>
+          <article id="forum">
+            <h2 class="thread-title">How should I evaluate translation quality?</h2>
+            <p id="thread-excerpt">The topic asks for practical evaluation methods and examples.</p>
+            <div id="thread-meta"><span>128 replies</span><span>5k views</span><time>2h ago</time></div>
+          </article>
+        `;
+
+        assert(classify('#card').kind === 'content-card', 'story card was not recognized');
+        assert(classify('#forum h2').kind === 'forum-topic', 'forum topic was not recognized');
+        assert(classify('#thread-excerpt').kind === 'forum-excerpt', 'forum excerpt was not recognized');
+        assert(classify('#thread-meta').kind === 'metadata', 'forum metadata was not recognized');
+      });
+
+      test('activity words in prose remain prose rather than metadata', () => {
+        document.body.innerHTML = `
+          <article><p id="prose">The activity report includes 128 replies from
+            customers and explains how the team reviewed each response in detail.</p></article>
+        `;
+
+        const result = classify('#prose');
+        assert(result.kind === 'paragraph', `prose kind was ${result.kind}`);
+        assert(!result.reasons.includes('metadata-hint'), 'prose received a metadata hint');
+      });
+
+      test('interactive controls are classified as UI labels', () => {
+        document.body.innerHTML = '<button id="button">Save changes</button>';
+        const result = classify('#button');
+
+        assert(result.kind === 'ui', `button kind was ${result.kind}`);
+        assert(result.role === 'control', `button role was ${result.role}`);
+      });
+
+      const failures = [];
+      for (const item of tests) {
+        try {
+          item.fn();
+        } catch (error) {
+          failures.push({ name: item.name, error: error.stack || error.message });
+        }
+      }
+      return { total: tests.length, failures };
+    };
+  </script>
+</body>
+</html>

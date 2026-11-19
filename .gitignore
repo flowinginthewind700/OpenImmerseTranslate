@@ -18,9 +18,13 @@ npm-debug.log*
 # 临时文件
 *.tmp
 *.temp
+__pycache__/
+*.pyc
 
 # 打包输出
 dist/
 *.zip
 *.crx
 
+# 本地 GPLv3 参考仓库，不参与构建或提交
+thirdparty/

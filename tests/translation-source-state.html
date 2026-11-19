@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Translation source state browser tests</title>
+</head>
+<body>
+  <script src="../shared/translation-source-state.js"></script>
+  <script>
+    window.runTranslationSourceStateTests = async () => {
+      const tests = [];
+      const assert = (condition, message) => {
+        if (!condition) throw new Error(message);
+      };
+      const test = (name, fn) => tests.push({ name, fn });
+
+      test('a captured source remains current until it is invalidated', () => {
+        const store = OITTranslationSourceState.createSourceStateStore();
+        const host = document.createElement('p');
+        host.textContent = 'Current source';
+        document.body.appendChild(host);
+
+        const snapshot = store.capture(host, 'Current source');
+        assert(store.isCurrent(snapshot, 'Current source'),
+          'new source snapshot was immediately stale');
+
+        store.invalidate(host);
+        assert(!store.isCurrent(snapshot, 'Current source'),
+          'invalidated source snapshot was still accepted');
+      });
+
+      test('a changed fingerprint rejects a response without an invalidation', () => {
+        const store = OITTranslationSourceState.createSourceStateStore();
+        const host = document.createElement('p');
+        document.body.appendChild(host);
+
+        const snapshot = store.capture(host, 'Original source');
+        assert(!store.isCurrent(snapshot, 'Replacement source'),
+          'changed source fingerprint was accepted');
+      });
+
+      test('disconnected nodes always reject stale responses', () => {
+        const store = OITTranslationSourceState.createSourceStateStore();
+        const host = document.createElement('p');
+        const snapshot = store.capture(host, 'Detached source');
+
+        assert(!store.isCurrent(snapshot, 'Detached source'),
+          'disconnected source accepted an in-flight response');
+      });
+
+      test('source generations are isolated per element', () => {
+        const store = OITTranslationSourceState.createSourceStateStore();
+        const first = document.createElement('p');
+        const second = document.createElement('p');
+        document.body.append(first, second);
+
+        const firstSnapshot = store.capture(first, 'First');
+        const secondSnapshot = store.capture(second, 'Second');
+        store.invalidate(first);
+
+        assert(!store.isCurrent(firstSnapshot, 'First'),
+          'invalidated element retained its old generation');
+        assert(store.isCurrent(secondSnapshot, 'Second'),
+          'one element invalidation changed another element');
+      });
+
+      const failures = [];
+      for (const item of tests) {
+        try {
+          await item.fn();
+        } catch (error) {
+          failures.push({ name: item.name, error: error.stack || error.message });
+        }
+      }
+      return { total: tests.length, failures };
+    };
+  </script>
+</body>
+</html>

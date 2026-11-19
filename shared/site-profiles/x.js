@@ -1,0 +1,620 @@
+/**
+ * Open Immerse Translate - X/Twitter site profile.
+ *
+ * This profile owns only X-specific content meaning and resilient UI root
+ * discovery. Generic filtering, unitization, and translation remain shared.
+ */
+(function initXSiteProfile(root, factory) {
+  const api = factory();
+
+  if (typeof module === 'object' && module.exports) {
+    module.exports = api;
+  }
+
+  root.OITSiteProfileX = api;
+})(typeof globalThis !== 'undefined' ? globalThis : this, function createXSiteProfile() {
+  'use strict';
+
+  const X_HOSTS = new Set([
+    'x.com',
+    'www.x.com',
+    'mobile.x.com',
+    'twitter.com',
+    'www.twitter.com',
+    'mobile.twitter.com'
+  ]);
+  const POST_CONTAINER = ':is(article, [role="article"])';
+  const POST_TEXT_SELECTOR = [
+    `${POST_CONTAINER} [data-testid="tweetText"]`,
+    `${POST_CONTAINER} div[dir="auto"].whitespace-pre-wrap`
+  ].join(',');
+  const SURFACE_SELECTOR = [
+    `${POST_CONTAINER} [data-post-avatar="true"]`,
+    `${POST_CONTAINER} [data-engagement-action]`,
+    POST_TEXT_SELECTOR
+  ].join(',');
+  const METADATA_SELECTOR = [
+    '[data-testid="User-Name"]',
+    '[data-testid="UserName"]',
+    '[data-testid="socialContext"]',
+    '[data-testid="analytics"]',
+    '[data-testid="reply"]',
+    '[data-testid="retweet"]',
+    '[data-testid="like"]',
+    '[data-testid="bookmark"]',
+    '[data-testid="share"]',
+    '[data-engagement-action]',
+    'time',
+    '[datetime]'
+  ].join(',');
+  const NAVIGATION_SELECTOR = 'header, nav, [role="navigation"]';
+  const SIDENAV_ROOT_SELECTOR = '[data-testid="SideNav"]';
+  const SUPPLEMENTAL_ROOT_SELECTOR = [
+    '[data-testid="sidebarColumn"]',
+    'aside[aria-label*="Timeline: Trending"]'
+  ].join(',');
+  const SUPPLEMENTAL_TREND_SELECTOR = '[data-testid="trend"]';
+  const USER_DESCRIPTION_SELECTOR = '[data-testid="UserDescription"]';
+  const USER_CELL_SELECTOR = '[data-testid="UserCell"]';
+  const SUPPLEMENTAL_RICH_TEXT_SELECTOR = '[lang], [dir], [data-testid="trend"]';
+  const SUPPLEMENTAL_EXCLUSION_SELECTOR = [
+    METADATA_SELECTOR,
+    'button',
+    'a[href]',
+    '[role="button"]',
+    '[role="link"]',
+    'input',
+    'textarea',
+    'select'
+  ].join(',');
+  const SIDENAV_CONTROL_SELECTOR = [
+    'a[href][data-testid^="SideNav_"]',
+    'button[data-testid^="SideNav_"]',
+    '[role="button"][data-testid^="SideNav_"]'
+  ].join(',');
+  const NAVIGATION_CONTROL_SELECTOR = [
+    'a[href]',
+    'button',
+    '[role="button"]',
+    '[role="tab"]',
+    '[role^="menuitem"]'
+  ].join(',');
+  const NAVIGATION_STATE_SELECTOR = [
+    '[aria-selected="true"]',
+    '[aria-selected="false"]',
+    '[aria-current]:not([aria-current="false"])'
+  ].join(',');
+  const EXPLICIT_ADAPTIVE_ROOT_SELECTOR = [
+    '[data-testid="AppTabBar"]',
+    '[data-testid="Dropdown"]',
+    SIDENAV_ROOT_SELECTOR
+  ].join(',');
+  const NAVIGATION_LINK_PATH_SET = new Set([
+    '/home',
+    '/explore',
+    '/notifications',
+    '/messages',
+    '/jobs',
+    '/bookmarks',
+    '/lists',
+    '/i/grok',
+    '/i/bookmarks',
+    '/i/jobs',
+    '/i/communities',
+    '/i/premium',
+    '/i/verified-orgs',
+    '/i/lists',
+    '/i/connect_people',
+    '/i/topics'
+  ]);
+  const NAVIGATION_EXCLUSION_SELECTOR = [
+    POST_CONTAINER,
+    'main',
+    '[role="main"]',
+    'body',
+    'html'
+  ].join(',');
+  const CONTENT_ROOT_LIMIT = 120;
+  const SUPPLEMENTAL_ROOT_LIMIT = 12;
+  const NAVIGATION_CONTROL_LIMIT = 4000;
+  const NAVIGATION_ANCESTOR_DEPTH = 20;
+  const NAVIGATION_CLUSTER_CONTROL_LIMIT = 120;
+  const ADAPTIVE_ROOT_SOURCE_PRIORITY = Object.freeze({
+    'x:explicit': 3,
+    'x:sidenav-cluster': 2,
+    'x:route-cluster': 1
+  });
+
+  function normalizeHost(hostname) {
+    return String(hostname || '').trim().toLowerCase();
+  }
+
+  function isXHost(hostname) {
+    return X_HOSTS.has(normalizeHost(hostname));
+  }
+
+  function hasXSurface(documentRef) {
+    return Boolean(documentRef?.querySelector?.(`main ${SURFACE_SELECTOR}`));
+  }
+
+  function matches(documentRef = globalThis.document, locationRef = globalThis.location) {
+    return isXHost(locationRef?.hostname) || hasXSurface(documentRef);
+  }
+
+  function collectMatches(base, selector) {
+    if (!base?.querySelectorAll) return [];
+    const matches = base.nodeType === 1 && base.matches?.(selector) ? [base] : [];
+    matches.push(...base.querySelectorAll(selector));
+    return matches;
+  }
+
+  function getElementDepth(element) {
+    let depth = 0;
+    let current = element;
+    while (current?.parentElement) {
+      depth++;
+      current = current.parentElement;
+    }
+    return depth;
+  }
+
+  function getXPath(anchor) {
+    const rawHref = anchor?.getAttribute?.('href');
+    if (!rawHref) return null;
+    try {
+      const url = new URL(rawHref, 'https://x.com');
+      if (!isXHost(url.hostname)) return null;
+      return (url.pathname.replace(/\/+$/, '') || '/').toLowerCase();
+    } catch (error) {
+      return null;
+    }
+  }
+
+  function isNavigationLink(anchor) {
+    if (!anchor?.matches?.('a[href]')) return false;
+    if (anchor.matches('[data-testid^="AppTabBar_"]')) return true;
+    if (NAVIGATION_LINK_PATH_SET.has(getXPath(anchor))) return true;
+    return anchor.matches(NAVIGATION_STATE_SELECTOR)
+      || anchor.matches('[role="tab"], [role^="menuitem"]')
+      || Boolean(anchor.closest?.(SIDENAV_ROOT_SELECTOR))
+      || Boolean(anchor.matches?.(SIDENAV_CONTROL_SELECTOR));
+  }
+
+  function isNavigationControl(control) {
+    if (!control?.matches?.(NAVIGATION_CONTROL_SELECTOR)) return false;
+    if (control.closest?.(POST_CONTAINER)) return false;
+    if (control.matches(
+      '[data-testid^="AppTabBar_"], [data-testid^="SideNav_"], '
+        + '[role="tab"], [role^="menuitem"], '
+        + NAVIGATION_STATE_SELECTOR
+    )) {
+      return true;
+    }
+    if (control.closest?.(SIDENAV_ROOT_SELECTOR)
+        || control.closest?.(NAVIGATION_SELECTOR)) {
+      return true;
+    }
+    return control.matches('a[href]')
+      && NAVIGATION_LINK_PATH_SET.has(getXPath(control));
+  }
+
+  function isInternalNavigationAnchor(control) {
+    return Boolean(
+      control?.matches?.('a[href]')
+      && getXPath(control)
+      && !control.closest?.(POST_CONTAINER)
+    );
+  }
+
+  function getAccountHandle(control) {
+    const match = String(control?.textContent || '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .match(/(?:^|\s)@([a-z0-9_]{1,15})(?=\s|$)/i);
+    return match ? match[1].toLowerCase() : null;
+  }
+
+  function isAccountIdentityControl(control) {
+    if (!control?.matches?.(NAVIGATION_CONTROL_SELECTOR)
+        || control.closest?.(POST_CONTAINER)) {
+      return false;
+    }
+    const handle = getAccountHandle(control);
+    if (!handle) return false;
+    const label = String(control.textContent || '').replace(/\s+/g, ' ').trim();
+    if (label === `@${handle}`) return false;
+    const path = getXPath(control);
+    return path === `/${handle}` || control.matches('button, [role="button"]');
+  }
+
+  function countDistinctNavigationPaths(controls) {
+    return new Set(controls.map(getXPath).filter(Boolean)).size;
+  }
+
+  function isEligibleNavigationCluster(root, controls) {
+    if (controls.length < 2
+        || controls.length > NAVIGATION_CLUSTER_CONTROL_LIMIT) {
+      return false;
+    }
+    const navigationControls = controls.filter(isNavigationControl);
+    const internalAnchors = controls.filter(isInternalNavigationAnchor);
+    const statefulControls = navigationControls.filter(control => (
+      control.matches(NAVIGATION_STATE_SELECTOR)
+    ));
+    const hasRepeatedRoutes = navigationControls.length >= 2
+      && (
+        countDistinctNavigationPaths(navigationControls) >= 2
+        || statefulControls.length === navigationControls.length
+      );
+    const insideMain = Boolean(root.closest?.('main, [role="main"]'));
+    const hasAnchoredRail = !insideMain
+      && internalAnchors.length >= 3
+      && navigationControls.length >= 1;
+    return hasRepeatedRoutes || hasAnchoredRail;
+  }
+
+  function findGroupedNavigationRoots(base) {
+    const controls = collectMatches(base, NAVIGATION_CONTROL_SELECTOR)
+      .filter(control => !control.closest?.(POST_CONTAINER))
+      .slice(0, NAVIGATION_CONTROL_LIMIT);
+    if (controls.length < 2) return [];
+
+    const rootLinks = new Map();
+    for (const control of controls) {
+      let current = control.parentElement;
+      let depth = 0;
+      while (current
+          && depth++ < NAVIGATION_ANCESTOR_DEPTH
+          && !current.matches?.(NAVIGATION_EXCLUSION_SELECTOR)) {
+        const containedControls = rootLinks.get(current) || [];
+        containedControls.push(control);
+        rootLinks.set(current, containedControls);
+        current = current.parentElement;
+      }
+    }
+
+    const eligible = Array.from(rootLinks.entries())
+      .filter(([root, containedControls]) => (
+        isEligibleNavigationCluster(root, containedControls)
+      ))
+      .map(([root, containedControls]) => ({ root, containedControls }));
+
+    return eligible
+      .filter(candidate => !eligible.some(other => (
+        other.root !== candidate.root
+        && candidate.root.contains(other.root)
+        && other.containedControls.length >= candidate.containedControls.length
+      )))
+      .sort((left, right) => (
+        right.containedControls.length - left.containedControls.length
+        || getElementDepth(right.root) - getElementDepth(left.root)
+      ))
+      .map(candidate => candidate.root);
+  }
+
+  function findGroupedSideNavRoots(base) {
+    const controls = collectMatches(base, SIDENAV_CONTROL_SELECTOR)
+      .filter(control => !control.closest?.(POST_CONTAINER));
+    if (controls.length < 2) return [];
+
+    const rootControls = new Map();
+    for (const control of controls) {
+      let current = control.parentElement;
+      while (current && !current.matches?.(NAVIGATION_EXCLUSION_SELECTOR)) {
+        const containedControls = rootControls.get(current) || [];
+        containedControls.push(control);
+        rootControls.set(current, containedControls);
+        current = current.parentElement;
+      }
+    }
+
+    const eligible = Array.from(rootControls.entries())
+      .filter(([, containedControls]) => containedControls.length >= 2)
+      .map(([root, containedControls]) => ({ root, containedControls }));
+
+    return eligible
+      .filter(candidate => !eligible.some(other => (
+        other.root !== candidate.root
+        && candidate.root.contains(other.root)
+        && other.containedControls.length >= candidate.containedControls.length
+      )))
+      .sort((left, right) => (
+        right.containedControls.length - left.containedControls.length
+        || getElementDepth(right.root) - getElementDepth(left.root)
+      ))
+      .map(candidate => candidate.root);
+  }
+
+  function getAdaptiveRootSourcePriority(source) {
+    return ADAPTIVE_ROOT_SOURCE_PRIORITY[source] || 0;
+  }
+
+  function normalizeAdaptiveRoots(candidates) {
+    const sourceByRoot = new Map();
+    for (const candidate of candidates) {
+      const root = candidate?.root;
+      if (root?.nodeType !== 1 || !root.isConnected) continue;
+      const existingSource = sourceByRoot.get(root);
+      if (!existingSource
+          || getAdaptiveRootSourcePriority(candidate.source)
+            > getAdaptiveRootSourcePriority(existingSource)) {
+        sourceByRoot.set(root, candidate.source);
+      }
+    }
+
+    const ranked = Array.from(sourceByRoot, ([root, source]) => ({
+      root,
+      source,
+      controls: collectMatches(root, NAVIGATION_CONTROL_SELECTOR)
+        .filter(control => !control.closest?.(POST_CONTAINER))
+    })).sort((left, right) => (
+      getAdaptiveRootSourcePriority(right.source)
+        - getAdaptiveRootSourcePriority(left.source)
+      || right.controls.length - left.controls.length
+      || getElementDepth(right.root) - getElementDepth(left.root)
+    ));
+
+    const coveredControls = new Set();
+    return ranked.filter(item => {
+      const uncovered = item.controls.some(control => !coveredControls.has(control));
+      const authoritativeEmptyRoot = item.controls.length === 0
+        && getAdaptiveRootSourcePriority(item.source)
+          === getAdaptiveRootSourcePriority('x:explicit');
+      if (!uncovered && !authoritativeEmptyRoot) return false;
+      for (const control of item.controls) coveredControls.add(control);
+      return true;
+    });
+  }
+
+  function normalizeSupplementalRoots(roots) {
+    const connected = Array.from(new Set(roots))
+      .filter(root => root?.nodeType === 1 && root.isConnected);
+    return connected.filter(root => !connected.some(other => (
+      other !== root
+      && root.contains(other)
+      && getElementDepth(other) >= getElementDepth(root)
+    )));
+  }
+
+  function diagnoseAdaptiveRoots(base = globalThis.document?.body) {
+    if (!base?.querySelectorAll) return [];
+    const candidates = [
+      ...collectMatches(base, EXPLICIT_ADAPTIVE_ROOT_SELECTOR)
+        .map(root => ({ root, source: 'x:explicit' })),
+      ...findGroupedNavigationRoots(base)
+        .map(root => ({ root, source: 'x:route-cluster' })),
+      ...findGroupedSideNavRoots(base)
+        .map(root => ({ root, source: 'x:sidenav-cluster' }))
+    ];
+    return normalizeAdaptiveRoots(candidates);
+  }
+
+  function findAdaptiveRoots(base = globalThis.document?.body) {
+    return diagnoseAdaptiveRoots(base).map(item => item.root);
+  }
+
+  function findContentRoots(base = globalThis.document?.body, options = {}) {
+    if (!base?.querySelectorAll) return [];
+    const isVisible = typeof options.isVisible === 'function'
+      ? options.isVisible
+      : element => Boolean(element?.isConnected);
+    const limit = Math.max(1, Number(options.limit) || CONTENT_ROOT_LIMIT);
+    const roots = [];
+    const seen = new Set();
+
+    for (const postText of collectMatches(base, POST_TEXT_SELECTOR)) {
+      if (roots.length >= limit) break;
+      if (!isVisible(postText)) continue;
+      const root = postText.closest?.(POST_CONTAINER);
+      if (!root || seen.has(root) || !isVisible(root)) continue;
+      seen.add(root);
+      roots.push(root);
+    }
+    return roots;
+  }
+
+  function getContentRoot(element, options = {}) {
+    const normalized = element?.nodeType === 1 ? element : element?.parentElement;
+    if (!normalized?.matches) return null;
+
+    const isVisible = typeof options.isVisible === 'function'
+      ? options.isVisible
+      : candidate => Boolean(candidate?.isConnected);
+    const closestPost = normalized.closest?.(POST_CONTAINER);
+    if (closestPost && isVisible(closestPost)) return closestPost;
+    if (!normalized.querySelector) return null;
+
+    const nestedPost = Array.from(normalized.querySelectorAll(POST_TEXT_SELECTOR))
+      .find(isVisible);
+    const nestedRoot = nestedPost?.closest?.(POST_CONTAINER);
+    if (!nestedRoot || !isVisible(nestedRoot)) return null;
+    if (normalized.matches('main, [role="main"]')) return normalized;
+    return nestedRoot;
+  }
+
+  function getAdaptiveRoot(element) {
+    const normalized = element?.nodeType === 1 ? element : element?.parentElement;
+    if (!normalized?.matches || normalized.closest?.(POST_CONTAINER)) return null;
+
+    const explicit = normalized.closest?.(EXPLICIT_ADAPTIVE_ROOT_SELECTOR);
+    if (explicit) return explicit;
+    const semantic = normalized.closest?.(NAVIGATION_SELECTOR);
+    if (semantic) return semantic;
+    const documentRef = normalized.ownerDocument || globalThis.document;
+    const discovered = findAdaptiveRoots(documentRef?.body || documentRef)
+      .find(root => root === normalized || root.contains(normalized));
+    if (discovered) return discovered;
+
+    const link = normalized.closest?.('a[href]');
+    const appTab = normalized.closest?.('[data-testid^="AppTabBar_"]');
+    if (!appTab && !isNavigationLink(link)) return null;
+
+    return findAdaptiveRoots(documentRef?.body || documentRef)
+      .find(root => root === normalized || root.contains(normalized)) || null;
+  }
+
+  function findSupplementalRoots(base = globalThis.document?.body, options = {}) {
+    if (!base?.querySelectorAll) return [];
+    const isVisible = typeof options.isVisible === 'function'
+      ? options.isVisible
+      : element => Boolean(element?.isConnected);
+    const limit = Math.max(1, Number(options.limit) || SUPPLEMENTAL_ROOT_LIMIT);
+    const roots = collectMatches(base, SUPPLEMENTAL_ROOT_SELECTOR)
+      .filter(root => isVisible(root))
+      .slice(0, limit);
+    const containingRoot = getSupplementalRoot(base, options);
+    if (containingRoot && isVisible(containingRoot)) roots.push(containingRoot);
+    return normalizeSupplementalRoots(roots);
+  }
+
+  function getSupplementalRoot(element, options = {}) {
+    const normalized = element?.nodeType === 1 ? element : element?.parentElement;
+    if (!normalized?.matches || normalized.closest?.(POST_CONTAINER)) return null;
+
+    const sidebar = normalized.closest?.('[data-testid="sidebarColumn"]');
+    const fallbackAside = normalized.closest?.(
+      'aside[aria-label*="Timeline: Trending"]'
+    );
+    let root = sidebar || fallbackAside || null;
+    if (!root && normalized.querySelectorAll) {
+      root = Array.from(normalized.querySelectorAll(SUPPLEMENTAL_ROOT_SELECTOR))
+        .find(candidate => candidate.isConnected) || null;
+    }
+    if (!root) return null;
+
+    const isVisible = typeof options.isVisible === 'function'
+      ? options.isVisible
+      : candidate => Boolean(candidate?.isConnected);
+    return isVisible(root) ? root : null;
+  }
+
+  function isInsideSupplementalRoot(element) {
+    return Boolean(getSupplementalRoot(element));
+  }
+
+  function isMetadataElement(element) {
+    const description = element.closest?.(USER_DESCRIPTION_SELECTOR);
+    if (description && !isInsideSupplementalRoot(description)) return true;
+    return Boolean(element.closest?.(METADATA_SELECTOR));
+  }
+
+  function isSupplementalHeading(element) {
+    const heading = element.closest?.('h1, h2, h3, h4, h5, h6, [role="heading"]');
+    return Boolean(heading && isInsideSupplementalRoot(heading));
+  }
+
+  function isSupplementalTrendContent(element) {
+    if (!isInsideSupplementalRoot(element)
+        || element.closest?.(SUPPLEMENTAL_EXCLUSION_SELECTOR)) {
+      return false;
+    }
+    const text = String(element.textContent || '').replace(/\s+/g, ' ').trim();
+    if (text.length < 2
+        || /^[\d.,]+\s*[kmb]?(?:\s+posts?)?$/i.test(text)) {
+      return false;
+    }
+    return Boolean(element.closest?.(SUPPLEMENTAL_TREND_SELECTOR))
+      || isSupplementalHeading(element)
+      || element.matches?.(SUPPLEMENTAL_RICH_TEXT_SELECTOR);
+  }
+
+  function isSupplementalUserBio(element) {
+    const description = element.closest?.(USER_DESCRIPTION_SELECTOR);
+    if (description && isInsideSupplementalRoot(description)) return true;
+    if (!element.closest?.(USER_CELL_SELECTOR)
+        || !isInsideSupplementalRoot(element)
+        || element.closest?.(SUPPLEMENTAL_EXCLUSION_SELECTOR)) {
+      return false;
+    }
+    return Boolean(element.matches?.(SUPPLEMENTAL_RICH_TEXT_SELECTOR));
+  }
+
+  function isSupplementalContent(element) {
+    if (!element?.matches || element.closest?.(POST_CONTAINER)) return false;
+    if (!isInsideSupplementalRoot(element)) return false;
+    return isSupplementalHeading(element)
+      || isSupplementalTrendContent(element)
+      || isSupplementalUserBio(element);
+  }
+
+  function getSemanticContentRole(element) {
+    if (!element?.matches) return null;
+    if (isSupplementalContent(element)) return 'supplemental-content';
+    if (isMetadataElement(element)) return 'metadata';
+    if (isAccountIdentityControl(element.closest?.(NAVIGATION_CONTROL_SELECTOR))) {
+      return 'metadata';
+    }
+    if (element.matches(POST_TEXT_SELECTOR)) return 'post-body';
+    if (element.closest?.(NAVIGATION_SELECTOR)
+        || element.closest?.(SIDENAV_ROOT_SELECTOR)
+        || element.closest?.(SIDENAV_CONTROL_SELECTOR)) {
+      return 'navigation-label';
+    }
+    return null;
+  }
+
+  function getElementPolicy(element, scope) {
+    if (!element?.matches) return null;
+    if (isMetadataElement(element)
+        || isAccountIdentityControl(
+          element.closest?.(NAVIGATION_CONTROL_SELECTOR)
+        )) {
+      return Object.freeze({
+        action: scope === 'full' ? 'skip-subtree' : 'skip-self',
+        role: 'metadata',
+        reason: 'x-metadata'
+      });
+    }
+    if (isSupplementalContent(element)) {
+      return Object.freeze({
+        action: 'keep',
+        role: 'supplemental-content',
+        reason: 'x-supplemental-content'
+      });
+    }
+    if (element.matches(POST_TEXT_SELECTOR)) {
+      return Object.freeze({
+        action: 'keep',
+        role: 'post-body',
+        reason: 'x-post-body'
+      });
+    }
+    if (element.closest?.(NAVIGATION_SELECTOR)
+        || element.closest?.(SIDENAV_ROOT_SELECTOR)
+        || element.closest?.(SIDENAV_CONTROL_SELECTOR)) {
+      return Object.freeze({
+        action: 'keep',
+        role: 'navigation-label',
+        reason: 'x-navigation-label'
+      });
+    }
+    return null;
+  }
+
+  return Object.freeze({
+    id: 'x',
+    POST_TEXT_SELECTOR,
+    SURFACE_SELECTOR,
+    METADATA_SELECTOR,
+    NAVIGATION_SELECTOR,
+    SIDENAV_ROOT_SELECTOR,
+    SIDENAV_CONTROL_SELECTOR,
+    EXPLICIT_ADAPTIVE_ROOT_SELECTOR,
+    SUPPLEMENTAL_ROOT_SELECTOR,
+    SUPPLEMENTAL_TREND_SELECTOR,
+    USER_DESCRIPTION_SELECTOR,
+    semanticTargets: Object.freeze([POST_TEXT_SELECTOR]),
+    matches,
+    isXHost,
+    hasXSurface,
+    findContentRoots,
+    getContentRoot,
+    findAdaptiveRoots,
+    diagnoseAdaptiveRoots,
+    getAdaptiveRoot,
+    findSupplementalRoots,
+    getSupplementalRoot,
+    getSemanticContentRole,
+    getElementPolicy
+  });
+});

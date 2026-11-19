@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Background translation service browser tests</title>
+</head>
+<body>
+  <script src="../shared/prompt-policy.js"></script>
+  <script src="../shared/translation-core.js"></script>
+  <script src="../shared/model-policy.js"></script>
+  <script src="../shared/request-cache.js"></script>
+  <script src="../background/rate-limiter.js"></script>
+  <script src="../background/translation-service.js"></script>
+  <script>
+    window.runTranslationServiceTests = async () => {
+      const translationCore = window.OITTranslationCore;
+      const modelPolicy = window.OITModelPolicy;
+      const requestCacheModule = window.OITRequestCache;
+      const scheduler = window.OITRateLimiter;
+      const tests = [];
+      const assert = (condition, message) => {
+        if (!condition) throw new Error(message);
+      };
+      const test = (name, fn) => tests.push({ name, fn });
+      const expectRejection = async (promise, message) => {
+        try {
+          await promise;
+        } catch (error) {
+          return error;
+        }
+        throw new Error(message);
+      };
+      const flushMicrotasks = () => Promise.resolve().then(() => Promise.resolve());
+      const createLimiter = () => ({
+        active: 0,
+        acquisitions: 0,
+        releases: 0,
+        applyConfig() {},
+        async acquire(signal) {
+          if (signal?.aborted) throw scheduler.createAbortError(signal.reason);
+          this.active++;
+          this.acquisitions++;
+        },
+        release() {
+          this.active--;
+          this.releases++;
+        }
+      });
+      const config = {
+        provider: 'openai',
+        apiEndpoint: 'https://api.openai.com/v1/chat/completions',
+        apiKey: 'secret',
+        modelName: 'gpt-4o-mini',
+        sourceLang: 'en',
+        targetLang: 'zh-CN',
+        translationStyle: 'accurate',
+        autoDetect: false,
+        customPrompt: '',
+        maxTokens: 2048,
+        temperature: 0.3
+      };
+      const createService = providerTransport => window.OITTranslationService
+        .createTranslationService({
+          translationCore,
+          modelPolicy,
+          requestCacheModule,
+          providerTransport,
+          rateLimiter: createLimiter(),
+          scheduler,
+          promptPolicyVersion: window.OITPromptPolicy.PROMPT_POLICY_VERSION,
+          logger: { warn() {} }
+        });
+
+      test('concurrent equivalent translations share one provider request', async () => {
+        let calls = 0;
+        let release;
+        const gate = new Promise(resolve => {
+          release = resolve;
+        });
+        const service = createService({
+          async requestLlmContent() {
+            calls++;
+            await gate;
+            return '["你好"]';
+          }
+        });
+
+        const first = service.translate(['Hello'], config, { scene: 'page' });
+        const second = service.translate(['Hello'], config, { scene: 'page' });
+        await flushMicrotasks();
+        assert(calls === 1, `equivalent requests made ${calls} provider calls`);
+        release();
+
+        const results = await Promise.all([first, second]);
+        assert(results[0][0] === '你好' && results[1][0] === '你好',
+          'shared requests did not both receive the translation');
+        assert(service.stats().shared === 1, 'shared request was not observable');
+      });
+
+      test('one cancelled waiter leaves the shared provider request alive', async () => {
+        const firstController = new AbortController();
+        const secondController = new AbortController();
+        let providerSignal = null;
+        let release;
+        const gate = new Promise(resolve => {
+          release = resolve;
+        });
+        const service = createService({
+          async requestLlmContent(system, user, requestConfig, signal) {
+            providerSignal = signal;
+            await gate;
+            return '["你好"]';
+          }
+        });
+
+        const first = service.translate(
+          ['Hello'],
+          config,
+          { scene: 'page' },
+          { signal: firstController.signal }
+        );
+        const second = service.translate(
+          ['Hello'],
+          config,
+          { scene: 'page' },
+          { signal: secondController.signal }
+        );
+        await flushMicrotasks();
+        firstController.abort();
+        assert(await first === null, 'cancelled waiter did not return a cancellation result');
+        assert(providerSignal && !providerSignal.aborted,
+          'cancelling one waiter aborted the shared provider request');
+
+        release();
+        assert((await second)[0] === '你好', 'remaining waiter lost the shared translation');
+      });
+
+      test('batch validation failure retries each item with aligned item context', async () => {
+        const prompts = [];
+        const service = createService({
+          async requestLlmContent(system, user) {
+            prompts.push(user);
+            if (prompts.length === 1) return 'not valid output';
+            return prompts.length === 2 ? '["甲"]' : '["乙"]';
+          }
+        });
+
+        const results = await service.translate(
+          ['Alpha', 'Beta'],
+          config,
+          {
+            scene: 'page',
+            title: 'Example',
+            surroundingText: 'Context',
+            itemContexts: ['Context A', 'Context B']
+          }
+        );
+
+        assert(results.join(',') === '甲,乙', 'fallback translations lost item order');
+        assert(prompts.length === 3, `fallback made ${prompts.length} provider requests`);
+        assert(prompts[0].includes('Context A') && prompts[0].includes('Context B'),
+          'batch request omitted item contexts');
+        assert(prompts[1].includes('Context A') && !prompts[1].includes('Context B'),
+          'first fallback request received the wrong context');
+        assert(prompts[2].includes('Context B') && !prompts[2].includes('Context A'),
+          'second fallback request received the wrong context');
+      });
+
+      test('provider failures are not cached', async () => {
+        let calls = 0;
+        const service = createService({
+          async requestLlmContent() {
+            calls++;
+            if (calls === 1) throw new Error('provider unavailable');
+            return '["恢复"]';
+          }
+        });
+
+        await expectRejection(
+          service.translate(['Hello'], config, { scene: 'page' }),
+          'provider failure unexpectedly resolved'
+        );
+        const results = await service.translate(['Hello'], config, { scene: 'page' });
+        assert(results[0] === '恢复' && calls === 2, 'failed translation polluted the cache');
+      });
+
+      test('cancellation during retry backoff releases the scheduler slot', async () => {
+        const controller = new AbortController();
+        const limiter = createLimiter();
+        let calls = 0;
+        const service = window.OITTranslationService.createTranslationService({
+          translationCore,
+          modelPolicy,
+          requestCacheModule,
+          providerTransport: {
+            async requestLlmContent() {
+              calls++;
+              throw new Error('429 too many requests');
+            }
+          },
+          rateLimiter: limiter,
+          scheduler,
+          promptPolicyVersion: window.OITPromptPolicy.PROMPT_POLICY_VERSION,
+          logger: { warn() {} }
+        });
+
+        const request = service.translate(
+          ['Hello'],
+          config,
+          { scene: 'page' },
+          { signal: controller.signal }
+        );
+        await flushMicrotasks();
+        controller.abort();
+        const outcome = await Promise.race([
+          request.then(value => ({ value })),
+          new Promise(resolve => setTimeout(() => resolve({ timedOut: true }), 250))
+        ]);
+
+        assert(!outcome.timedOut,
+          'cancellation did not interrupt the service retry backoff');
+        assert(outcome.value === null,
+          'cancelled service request did not return a cancellation result');
+        assert(calls === 1, `cancelled backoff started ${calls} provider calls`);
+        assert(limiter.active === 0, 'cancelled backoff retained the scheduler slot');
+      });
+
+      test('target-language text is skipped without calling the provider', async () => {
+        let calls = 0;
+        const service = createService({
+          async requestLlmContent() {
+            calls++;
+            return '["unexpected"]';
+          }
+        });
+
+        const results = await service.translate(
+          ['这是中文内容'],
+          { ...config, autoDetect: true },
+          { scene: 'page' }
+        );
+        assert(results[0] === '这是中文内容', 'target-language skip changed the source text');
+        assert(calls === 0, 'target-language skip reached the provider');
+      });
+
+      const failures = [];
+      for (const item of tests) {
+        try {
+          await item.fn();
+        } catch (error) {
+          failures.push({ name: item.name, error: error.stack || error.message });
+        }
+      }
+      return { total: tests.length, failures };
+    };
+  </script>
+</body>
+</html>

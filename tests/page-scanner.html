@@ -1,0 +1,901 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Page scanner browser tests</title>
+  <style>
+    body { margin: 0; font: 16px/1.5 sans-serif; }
+    p, h1, h2, label, button, pre { display: block; min-height: 24px; }
+  </style>
+</head>
+<body>
+  <script src="../shared/content-signals.js"></script>
+  <script src="../shared/content-unitizer.js"></script>
+  <script src="../shared/content-unit-classifier.js"></script>
+  <script src="../shared/content-ui-policy.js"></script>
+  <script src="../shared/content-filter.js"></script>
+  <script src="../shared/content-root-detector.js"></script>
+  <script src="../shared/site-profiles/x.js"></script>
+  <script src="../shared/content-site-adapters.js"></script>
+  <script src="../shared/page-scanner.js"></script>
+  <script>
+    window.runPageScannerTests = () => {
+      const scanner = window.OITPageScanner;
+      const tests = [];
+
+      const assert = (condition, message) => {
+        if (!condition) throw new Error(message);
+      };
+      const test = (name, fn) => tests.push({ name, fn });
+      const scan = (scope = 'smart', options = {}) => {
+        const context = scanner.createScanContext({ scope, ...options });
+        const candidates = scanner.collectPageCandidates(scope, { context });
+        return {
+          context,
+          candidates,
+          ids: candidates.map(candidate => candidate.element.id).filter(Boolean)
+        };
+      };
+
+      test('smart scope combines the reading root with visible navigation while full scope includes all static UI', () => {
+        document.body.innerHTML = `
+          <header id="header"><a id="header-link" href="/home">Home navigation</a></header>
+          <nav id="nav"><a id="nav-link" href="/products">Product navigation</a></nav>
+          <main id="main">
+            <h1 id="heading">A useful article heading</h1>
+            <article id="article">
+              <p id="lead">The lead paragraph contains enough readable prose to identify the main content area.</p>
+              <p id="body">A second paragraph confirms that this article remains the dominant reading surface.</p>
+            </article>
+          </main>
+          <form id="search-form">
+            <label id="search-label">Search the documentation</label>
+            <button id="search-button">Submit search</button>
+          </form>
+          <footer id="footer"><p id="footer-text">Footer description and legal information</p></footer>
+        `;
+
+        const smart = scan('smart');
+        assert(smart.ids.includes('lead') && smart.ids.includes('body'),
+          'smart scope did not include article paragraphs');
+        for (const included of ['header-link', 'nav-link']) {
+          assert(smart.ids.includes(included),
+            `smart scope omitted visible navigation label ${included}`);
+        }
+        for (const excluded of ['search-label', 'search-button', 'footer-text']) {
+          assert(!smart.ids.includes(excluded), `smart scope included ${excluded}`);
+        }
+
+        const full = scan('full');
+        for (const included of [
+          'header-link', 'nav-link', 'lead', 'body', 'search-label',
+          'search-button', 'footer-text'
+        ]) {
+          assert(full.ids.includes(included), `full scope omitted ${included}`);
+        }
+      });
+
+      test('smart adaptive UI does not translate hidden navigation before it becomes visible', () => {
+        document.body.innerHTML = `
+          <header id="adaptive-header">
+            <nav id="adaptive-nav">
+              <button id="more-control" type="button">More</button>
+              <div id="more-menu" role="menu" hidden>
+                <a id="settings-label" href="/settings" role="menuitem">Settings</a>
+              </div>
+            </nav>
+          </header>
+          <main><article><p id="adaptive-copy">Visible article prose remains the primary readable content.</p></article></main>
+        `;
+
+        const context = scanner.createScanContext({ scope: 'smart' });
+        const initial = scanner.collectPageCandidates('smart', { context });
+        const initialIds = initial.map(candidate => candidate.element.id);
+        assert(initialIds.includes('more-control'), 'visible smart navigation was not collected');
+        assert(!initialIds.includes('settings-label'), 'hidden menu was translated before it opened');
+
+        document.querySelector('#more-menu').hidden = false;
+        const revealed = scanner.collectDynamicCandidates(
+          document.querySelector('#more-menu'),
+          'smart',
+          { context }
+        );
+        const revealedIds = revealed.map(candidate => candidate.element.id);
+        assert(revealedIds.includes('settings-label'),
+          'revealed smart navigation menu was not collected');
+      });
+
+      test('dynamic wrapper mutations can reveal generic navigation outside the smart content root', () => {
+        document.body.innerHTML = `
+          <div id="generic-dynamic-shell">
+            <div id="generic-dynamic-navigation-wrapper" hidden>
+              <div id="generic-dynamic-navigation"
+                   style="display:block;width:220px;min-height:150px">
+                <a id="generic-dynamic-dashboard-control" href="/dashboard"
+                   style="display:flex;width:200px;height:34px">
+                  <span id="generic-dynamic-dashboard-label">Dashboard</span>
+                </a>
+                <a id="generic-dynamic-catalog-control" href="/catalog"
+                   style="display:flex;width:200px;height:34px">
+                  <span id="generic-dynamic-catalog-label">Catalog</span>
+                </a>
+                <a id="generic-dynamic-orders-control" href="/orders"
+                   style="display:flex;width:200px;height:34px">
+                  <span id="generic-dynamic-orders-label">Orders</span>
+                </a>
+                <a id="generic-dynamic-settings-control" href="/settings"
+                   style="display:flex;width:200px;height:34px">
+                  <span id="generic-dynamic-settings-label">Settings</span>
+                </a>
+              </div>
+            </div>
+            <main id="generic-dynamic-main">
+              <article>
+                <p id="generic-dynamic-copy">
+                  The article remains readable while a persistent navigation rail is revealed.
+                </p>
+              </article>
+            </main>
+          </div>
+        `;
+
+        const context = scanner.createScanContext({ scope: 'smart', site: 'generic' });
+        const initialIds = scanner.collectPageCandidates('smart', {
+          context,
+          site: 'generic'
+        }).map(candidate => candidate.element.id);
+        assert(!initialIds.includes('generic-dynamic-dashboard-label'),
+          'hidden generic navigation was collected before reveal');
+
+        const wrapper = document.querySelector('#generic-dynamic-navigation-wrapper');
+        wrapper.hidden = false;
+        const revealed = scanner.collectDynamicCandidates(wrapper, 'smart', {
+          context,
+          site: 'generic'
+        });
+        const ids = revealed.map(candidate => candidate.element.id);
+        for (const expected of [
+          'generic-dynamic-dashboard-label',
+          'generic-dynamic-catalog-label',
+          'generic-dynamic-orders-label',
+          'generic-dynamic-settings-label'
+        ]) {
+          assert(ids.includes(expected),
+            `generic revealed wrapper omitted navigation label ${expected}: ${ids.join(', ')}`);
+        }
+        assert(revealed.every(candidate => candidate.site === 'generic'),
+          'generic dynamic navigation was classified through an X-specific profile');
+      });
+
+      test('nested semantic containers collapse to non-duplicated readable units', () => {
+        document.body.innerHTML = `
+          <main id="main">
+            <div id="semantic-article" role="article">
+              <h2 id="nested-heading">Nested section heading</h2>
+              <p id="nested-body">This paragraph is the concrete reading unit inside the semantic article.</p>
+            </div>
+          </main>
+        `;
+
+        const result = scan('smart');
+        assert(!result.ids.includes('semantic-article'),
+          'semantic article container and its children were both emitted');
+        assert(result.ids.includes('nested-heading'), 'nested heading was lost during deduplication');
+        assert(result.ids.includes('nested-body'), 'nested paragraph was lost during deduplication');
+      });
+
+      test('page scan budget is enforced without throwing', () => {
+        document.body.innerHTML = `<main>${Array.from({ length: 30 }, (_, index) => (
+          `<p id="budget-${index}">Budget paragraph ${index} has readable text for scanning.</p>`
+        )).join('')}</main>`;
+
+        const result = scan('smart', { pageBudget: 6 });
+        assert(result.candidates.length <= 6,
+          `page budget exceeded: ${result.candidates.length} candidates`);
+        assert(result.context.stats.budgetExceeded, 'budget exhaustion was not recorded');
+      });
+
+      test('reading content cannot exhaust the discovery budget before class-only navigation', () => {
+        const paragraphs = Array.from({ length: 40 }, (_, index) => (
+          `<p id="class-only-copy-${index}">
+             Timeline post ${index} contains enough prose to consume the reading budget.
+           </p>`
+        )).join('');
+        document.body.innerHTML = `
+          <div id="class-only-app" style="position:relative;width:1200px;min-height:900px">
+            <div id="class-only-rail"
+                 style="position:absolute;left:0;top:120px;width:220px;height:220px">
+              <a id="class-only-home-control" href="/home"
+                 style="display:flex;width:200px;height:36px"><span id="class-only-home-label">Home</span></a>
+              <a id="class-only-explore-control" href="/explore"
+                 style="display:flex;width:200px;height:36px"><span id="class-only-explore-label">Explore</span></a>
+              <a id="class-only-notifications-control" href="/notifications"
+                 style="display:flex;width:200px;height:36px"><span id="class-only-notifications-label">Notifications</span></a>
+              <a id="class-only-messages-control" href="/messages"
+                 style="display:flex;width:200px;height:36px"><span id="class-only-messages-label">Messages</span></a>
+            </div>
+            <main id="class-only-main"
+                  style="display:block;margin-left:240px;width:760px;min-height:900px">
+              <div id="class-only-tabs"
+                   style="display:flex;width:360px;height:40px">
+                <a id="class-only-for-you-control" role="tab" href="/home"
+                   style="display:block;width:170px;height:34px">
+                  <span id="class-only-for-you-label">For you</span>
+                </a>
+                <a id="class-only-following-control" role="tab" href="/home?filter=following"
+                   style="display:block;width:170px;height:34px">
+                  <span id="class-only-following-label">Following</span>
+                </a>
+              </div>
+              <article>${paragraphs}</article>
+            </main>
+          </div>
+        `;
+
+        const context = scanner.createScanContext({
+          scope: 'smart',
+          site: 'x',
+          pageBudget: 10
+        });
+        const candidates = scanner.collectPageCandidates('smart', {
+          context,
+          site: 'x'
+        });
+        const ids = new Set(candidates.map(candidate => candidate.element.id));
+
+        for (const expected of [
+          'class-only-home-label',
+          'class-only-explore-label',
+          'class-only-notifications-label',
+          'class-only-messages-label',
+          'class-only-for-you-label',
+          'class-only-following-label'
+        ]) {
+          assert(ids.has(expected),
+            `class-only navigation label ${expected} was starved by reading content`);
+        }
+      });
+
+      test('dynamic replacement re-evaluates a disconnected content root', () => {
+        document.body.innerHTML = `
+          <main id="shell"><article id="old-article">
+            <p id="old-copy">The original article is about to be replaced by a client-side view.</p>
+          </article></main>
+        `;
+        const context = scanner.createScanContext({ scope: 'smart' });
+        scanner.collectPageCandidates('smart', { context });
+
+        document.body.innerHTML = `
+          <main id="shell"><article id="new-article">
+            <p id="new-copy">The replacement article contains newly rendered client-side prose.</p>
+          </article></main>
+        `;
+        const replacement = document.querySelector('#new-article');
+        const candidates = scanner.collectDynamicCandidates(replacement, 'smart', { context });
+        const ids = candidates.map(candidate => candidate.element.id);
+
+        assert(ids.includes('new-copy'), 'replacement content was rejected by a stale content root');
+        assert(!ids.includes('old-copy'), 'detached content was still collected');
+      });
+
+      test('dynamic content can replace a connected smart content root', () => {
+        document.body.innerHTML = `
+          <main id="old-main"><article>
+            <p id="old-connected-copy">The first client-side article is visible when translation starts.</p>
+          </article></main>
+        `;
+        const context = scanner.createScanContext({ scope: 'smart' });
+        scanner.collectPageCandidates('smart', { context });
+        assert(context.contentRoot?.id === 'old-main',
+          'initial smart content root was not selected');
+
+        document.querySelector('#old-main').style.display = 'none';
+        const replacement = document.createElement('main');
+        replacement.id = 'new-main';
+        replacement.innerHTML = `
+          <article><p id="new-connected-copy">A newer client-side article now contains the readable page content.</p></article>
+        `;
+        document.body.append(replacement);
+
+        const candidates = scanner.collectDynamicCandidates(replacement, 'smart', { context });
+        const ids = candidates.map(candidate => candidate.element.id);
+        assert(context.contentRoot?.id === 'new-main',
+          'connected smart content root was not recalculated');
+        assert(ids.includes('new-connected-copy'),
+          'new connected content root was rejected after recalculation');
+      });
+
+      test('open shadow roots are scanned and dynamically replaced content is included', () => {
+        document.body.innerHTML = `
+          <main id="shadow-main">
+            <p id="light-copy">A regular paragraph establishes the readable content root.</p>
+            <section id="shadow-host"></section>
+          </main>
+        `;
+        const host = document.querySelector('#shadow-host');
+        const shadowRoot = host.attachShadow({ mode: 'open' });
+        shadowRoot.innerHTML = '<p id="shadow-copy">This paragraph lives inside an open shadow root.</p>';
+
+        const result = scan('smart');
+        assert(result.ids.includes('light-copy'), 'light DOM paragraph was not scanned');
+        assert(result.ids.includes('shadow-copy'), 'open shadow root paragraph was not scanned');
+
+        const context = scanner.createScanContext({ scope: 'smart' });
+        scanner.collectPageCandidates('smart', { context });
+        const replacement = document.createElement('article');
+        replacement.id = 'shadow-replacement';
+        replacement.innerHTML = '<p id="replacement-copy">A dynamic replacement paragraph is visible here.</p>';
+        document.querySelector('#shadow-main').append(replacement);
+        const shadowHost = document.createElement('div');
+        replacement.append(shadowHost);
+        shadowHost.attachShadow({ mode: 'open' }).innerHTML =
+          '<p id="dynamic-shadow-copy">Nested dynamic shadow content is also readable.</p>';
+
+        const dynamicIds = scanner.collectDynamicCandidates(replacement, 'smart', { context })
+          .map(candidate => candidate.element.id);
+        assert(dynamicIds.includes('replacement-copy'), 'dynamic light DOM content was not collected');
+        assert(dynamicIds.includes('dynamic-shadow-copy'), 'dynamic open shadow content was not collected');
+      });
+
+      test('shadow root discovery is throttled unless explicitly refreshed', () => {
+        document.body.innerHTML = `
+          <main id="throttle-main">
+            <p>A paragraph establishes the content root for shadow discovery.</p>
+            <div id="initial-shadow-host"></div>
+          </main>
+        `;
+        document.querySelector('#initial-shadow-host')
+          .attachShadow({ mode: 'open' })
+          .innerHTML = '<p>Initial shadow content.</p>';
+
+        const context = scanner.createScanContext({ scope: 'smart' });
+        scanner.refreshOpenShadowRoots(document.body, context, {
+          force: true,
+          now: 1000
+        });
+        assert(context.shadowDiscovery.fullRuns === 1,
+          'initial shadow discovery was not recorded');
+        assert(context.openShadowRoots.size === 1,
+          'initial open shadow root was not registered');
+
+        const lateHost = document.createElement('div');
+        document.querySelector('#throttle-main').append(lateHost);
+        lateHost.attachShadow({ mode: 'open' }).innerHTML = '<p>Late shadow content.</p>';
+        scanner.refreshOpenShadowRoots(document.body, context, { now: 2000 });
+        assert(context.shadowDiscovery.fullRuns === 1,
+          'shadow discovery unexpectedly rescanned the whole document');
+        assert(context.openShadowRoots.size === 1,
+          'throttled discovery unexpectedly registered a new root');
+
+        scanner.refreshOpenShadowRoots(document.body, context, {
+          force: true,
+          now: 2000
+        });
+        assert(context.shadowDiscovery.fullRuns === 2,
+          'forced shadow discovery was not recorded');
+        assert(context.openShadowRoots.size === 2,
+          'forced discovery did not register the late shadow root');
+      });
+
+      test('heading trail and table headers remain attached to each translation item', () => {
+        document.body.innerHTML = `
+          <main id="context-main">
+            <h2 id="billing-heading">Billing settings</h2>
+            <p id="billing-copy">This paragraph explains how the monthly billing cycle works.</p>
+            <table>
+              <thead><tr><th>Plan</th><th>Monthly price</th></tr></thead>
+              <tbody><tr><td>Team</td><td id="price-cell">Twenty dollars each month</td></tr></tbody>
+            </table>
+          </main>
+        `;
+
+        const result = scan('smart');
+        const paragraph = result.candidates.find(candidate => candidate.element.id === 'billing-copy');
+        const cell = result.candidates.find(candidate => candidate.element.id === 'price-cell');
+
+        assert(paragraph?.headingTrail.includes('Billing settings'),
+          'paragraph is missing its heading trail');
+        assert(paragraph?.context.includes('heading trail: Billing settings'),
+          'translation context is missing heading semantics');
+        assert(cell?.tableContext.includes('row label: Team'),
+          'table cell is missing its row label');
+        assert(cell?.tableContext.includes('column label: Monthly price'),
+          'table cell is missing its column label');
+      });
+
+      test('non-semantic card titles retain their classified kind and summary remains separate', () => {
+        document.body.innerHTML = `
+          <main id="card-main">
+            <section class="story-results">
+              <div id="story-card" class="story-card">
+                <div id="card-title" class="story-card-title">A resilient translation workflow</div>
+                <p id="card-copy" class="story-card-description">
+                  The description explains how a team can review translated content without losing source context.
+                </p>
+              </div>
+            </section>
+          </main>
+        `;
+
+        const result = scan('smart');
+        const title = result.candidates.find(candidate => candidate.element.id === 'card-title');
+        const copy = result.candidates.find(candidate => candidate.element.id === 'card-copy');
+
+        assert(title, 'non-semantic card title was not collected');
+        assert(title.kind === 'title', `card title kind was ${title.kind}`);
+        assert(copy, 'card description was not collected separately');
+        assert(copy.kind === 'paragraph', `card description kind was ${copy.kind}`);
+        assert(!result.ids.includes('story-card'),
+          'card container duplicated its child translation candidates');
+      });
+
+      test('mixed layout containers are split into direct text and nested readable units', () => {
+        document.body.innerHTML = `
+          <main id="mixed-main">
+            <div id="mixed">
+              Read <a id="mixed-link" href="/guide">the configuration guide</a> before continuing.
+              <p id="mixed-body">The nested paragraph remains an independent translation unit.</p>
+              <button id="mixed-button">Save configuration</button>
+            </div>
+          </main>
+        `;
+
+        const result = scan('full');
+        const directRun = result.candidates.find(candidate => (
+          candidate.unitType === 'direct-text-run'
+        ));
+
+        assert(directRun, 'mixed direct text was not promoted to a stable unit');
+        assert(directRun.text.includes('Read the configuration guide before continuing.'),
+          'direct text unit lost safe inline content');
+        assert(result.ids.includes('mixed-body'),
+          'nested paragraph was lost after direct text unitization');
+        assert(result.ids.includes('mixed-button'),
+          'control was lost after direct text unitization');
+        assert(!result.ids.includes('mixed'),
+          'mixed container still duplicated its unitized children');
+      });
+
+      test('table headers, labels, summaries, and independent controls are not merged', () => {
+        document.body.innerHTML = `
+          <main id="semantic-main">
+            <label id="account-label">Account email address</label>
+            <details open>
+              <summary id="advanced-summary">Advanced translation settings</summary>
+              <p id="advanced-copy">These settings control the translation cache behavior.</p>
+            </details>
+            <table>
+              <thead><tr><th id="plan-header">Plan name</th><th id="price-header">Monthly price</th></tr></thead>
+              <tbody><tr><td id="team-cell">Team workspace</td><td id="price-cell">Twenty dollars</td></tr></tbody>
+            </table>
+            <div id="control-group">
+              <a id="control-link" href="/billing">Manage billing</a>
+              <button id="control-button">Cancel plan</button>
+            </div>
+          </main>
+        `;
+
+        const result = scan('full');
+        for (const id of [
+          'account-label', 'advanced-summary', 'advanced-copy', 'plan-header',
+          'price-header', 'team-cell', 'price-cell', 'control-link', 'control-button'
+        ]) {
+          assert(result.ids.includes(id), `full scope omitted ${id}`);
+        }
+        assert(!result.ids.includes('control-group'),
+          'control group container duplicated independent controls');
+      });
+
+      test('full scope splits interface labels from badges and icon controls', () => {
+        document.body.innerHTML = `
+          <header id="app-header">
+            <nav id="primary-navigation" aria-label="Primary">
+              <a id="home-control" href="/home">
+                <svg aria-hidden="true"><path d="M0 0h10v10z"></path></svg>
+                <div id="home-content">
+                  <span id="home-label">Home</span>
+                  <span id="home-badge">3</span>
+                </div>
+              </a>
+              <button id="notification-control" type="button">
+                <svg aria-hidden="true"><path d="M0 0h10v10z"></path></svg>
+                <span id="notification-label">Notifications</span>
+              </button>
+            </nav>
+          </header>
+          <main>
+            <p id="app-copy">The application paragraph remains a normal readable translation unit.</p>
+          </main>
+        `;
+
+        const result = scan('full');
+        assert(result.ids.includes('home-label'),
+          'full scope did not isolate the navigation label from its badge');
+        assert(result.ids.includes('notification-label'),
+          'full scope did not isolate a button label from its icon');
+        assert(!result.ids.includes('home-badge'),
+          'full scope selected a numeric navigation badge for translation');
+        assert(!result.ids.includes('home-control')
+          && !result.ids.includes('home-content'),
+        'full scope selected a composite navigation control instead of its label');
+        assert(!result.ids.includes('notification-control'),
+          'full scope selected a composite button instead of its label');
+        assert(result.ids.includes('app-copy'),
+          'full scope lost the readable main paragraph');
+      });
+
+      test('generic sites translate interface labels without site-specific adapters', () => {
+        document.body.innerHTML = `
+          <header id="generic-header">
+            <nav id="generic-navigation" aria-label="Primary">
+              <a id="generic-home-control" href="/">
+                <svg aria-hidden="true"><path d="M0 0h10v10z"></path></svg>
+                <span id="generic-home-label">Home</span>
+                <span id="generic-home-badge">12</span>
+              </a>
+              <button id="generic-create-control" type="button">
+                <svg aria-hidden="true"><path d="M0 0h10v10z"></path></svg>
+                <span id="generic-create-label">Create post</span>
+              </button>
+            </nav>
+          </header>
+          <main id="generic-main">
+            <article>
+              <h1 id="generic-title">A globally usable translation extension</h1>
+              <p id="generic-copy">
+                The generic scanner should translate ordinary article content on any website.
+              </p>
+            </article>
+            <form id="generic-form">
+              <label id="generic-email-label" for="generic-email">Email address</label>
+              <input id="generic-email" type="email">
+              <button id="generic-save-control" type="submit">
+                <span id="generic-save-label">Save changes</span>
+              </button>
+            </form>
+          </main>
+        `;
+
+        let clickCount = 0;
+        document.querySelector('#generic-save-control').addEventListener('click', event => {
+          event.preventDefault();
+          clickCount++;
+        });
+
+        const result = scan('full');
+        assert(result.context.site === 'generic',
+          `generic fixture was detected as ${result.context.site}`);
+        for (const id of [
+          'generic-home-label',
+          'generic-create-label',
+          'generic-title',
+          'generic-copy',
+          'generic-email-label',
+          'generic-save-label'
+        ]) {
+          assert(
+            result.ids.includes(id),
+            `generic full scope omitted ${id}: ${JSON.stringify(
+              result.candidates.map(candidate => ({
+                id: candidate.element.id,
+                unitType: candidate.unitType,
+                ownTextLength: candidate.ownTextLength
+              }))
+            )}`
+          );
+        }
+        for (const id of [
+          'generic-home-badge',
+          'generic-home-control',
+          'generic-create-control',
+          'generic-save-control'
+        ]) {
+          assert(!result.ids.includes(id), `generic full scope selected ${id}`);
+        }
+
+        document.querySelector('#generic-save-control').click();
+        assert(clickCount === 1, 'scanning removed or detached the control click listener');
+      });
+
+      test('smart scope discovers visible non-semantic navigation rails but not article action links', () => {
+        document.body.innerHTML = `
+          <div id="rail-app">
+            <div id="primary-rail" style="display:block;width:230px">
+              <a id="rail-home-control" href="/home" style="display:block;width:210px;height:32px">
+                <span id="rail-home-label">Home</span>
+                <span id="rail-home-badge">7</span>
+              </a>
+              <a id="rail-explore-control" href="/explore" style="display:block;width:210px;height:32px">
+                <span id="rail-explore-label">Explore</span>
+              </a>
+              <a id="rail-notifications-control" href="/notifications" style="display:block;width:210px;height:32px">
+                <span id="rail-notifications-label">Notifications</span>
+              </a>
+              <a id="rail-messages-control" href="/messages" style="display:block;width:210px;height:32px">
+                <span id="rail-messages-label">Messages</span>
+              </a>
+              <a id="rail-bookmarks-control" href="/bookmarks" style="display:block;width:210px;height:32px">
+                <span id="rail-bookmarks-label">Bookmarks</span>
+              </a>
+            </div>
+            <main id="rail-main">
+              <article id="rail-story">
+                <h1 id="rail-title">A globally readable page</h1>
+                <p id="rail-copy">The main story remains eligible while persistent controls receive their own labels.</p>
+                <div id="story-actions">
+                  <a id="story-share" href="/share">Share story</a>
+                  <a id="story-save" href="/save">Save story</a>
+                  <a id="story-more" href="/more">More story actions</a>
+                </div>
+              </article>
+            </main>
+          </div>
+        `;
+
+        const result = scan('smart');
+        for (const id of [
+          'rail-home-label',
+          'rail-explore-label',
+          'rail-notifications-label',
+          'rail-messages-label',
+          'rail-bookmarks-label',
+          'rail-title',
+          'rail-copy'
+        ]) {
+          assert(result.ids.includes(id),
+            `smart scope omitted non-semantic navigation or content label ${id}`);
+        }
+        for (const id of [
+          'rail-home-badge',
+          'rail-home-control',
+          'rail-explore-control',
+          'story-share',
+          'story-save',
+          'story-more'
+        ]) {
+          assert(!result.ids.includes(id),
+            `smart scope incorrectly selected ${id}`);
+        }
+        for (const id of ['rail-home-label', 'rail-explore-label']) {
+          const candidate = result.candidates.find(item => item.element.id === id);
+          assert(candidate?.siteRole === 'navigation-label',
+            `${id} did not retain navigation semantics`);
+        }
+      });
+
+      test('smart scope translates labels in a non-semantic horizontal top menu', () => {
+        document.body.innerHTML = `
+          <div id="topbar-app">
+            <div id="primary-topbar" style="display:flex;width:720px;height:40px">
+              <a id="top-home-control" href="/home" style="display:block;width:140px;height:32px">
+                <span id="top-home-label">Home</span>
+              </a>
+              <a id="top-explore-control" href="/explore" style="display:block;width:150px;height:32px">
+                <span id="top-explore-label">Explore</span>
+              </a>
+              <a id="top-notifications-control" href="/notifications" style="display:block;width:180px;height:32px">
+                <span id="top-notifications-label">Notifications</span>
+              </a>
+              <a id="top-messages-control" href="/messages" style="display:block;width:160px;height:32px">
+                <span id="top-messages-label">Messages</span>
+              </a>
+            </div>
+            <main id="topbar-main">
+              <article>
+                <h1 id="topbar-title">A page with a persistent top menu</h1>
+                <p id="topbar-copy">The readable article remains independent from the navigation labels.</p>
+              </article>
+            </main>
+          </div>
+        `;
+
+        const result = scan('smart');
+        for (const id of [
+          'top-home-label',
+          'top-explore-label',
+          'top-notifications-label',
+          'top-messages-label',
+          'topbar-title',
+          'topbar-copy'
+        ]) {
+          assert(result.ids.includes(id),
+            `smart scope omitted horizontal navigation or content label ${id}`);
+        }
+        for (const id of [
+          'top-home-control',
+          'top-explore-control',
+          'top-notifications-control',
+          'top-messages-control'
+        ]) {
+          assert(!result.ids.includes(id),
+            `smart scope selected composite horizontal control ${id}`);
+        }
+        for (const id of ['top-home-label', 'top-explore-label']) {
+          const candidate = result.candidates.find(item => item.element.id === id);
+          assert(candidate?.siteRole === 'navigation-label',
+            `${id} did not retain horizontal navigation semantics`);
+        }
+      });
+
+      test('complex X-like controls are aggregated once and rescanned without stable test ids', () => {
+        document.body.innerHTML = `
+          <div id="x-complex-shell" style="display:flex;width:1000px;height:700px">
+            <header id="x-complex-header"
+                    style="position:sticky;top:0;display:block;width:220px;height:300px">
+              <div id="x-complex-nav"
+                   style="display:flex;flex-direction:column;width:220px;height:280px">
+                <a id="x-complex-home-control" href="/home"
+                   style="display:flex;width:210px;height:42px">
+                  <div><svg aria-hidden="true"><path d="M0 0h12v12z"></path></svg></div>
+                  <div>
+                    <span id="x-complex-home-label">
+                      <span>Creator</span><span>home</span>
+                    </span>
+                    <span role="status">Live</span>
+                    <span class="notification-badge">4</span>
+                    <time datetime="2026-11-19T00:00:00Z">2h</time>
+                  </div>
+                </a>
+                <a id="x-complex-explore-control" href="/explore"
+                   style="display:flex;width:210px;height:42px">
+                  <span id="x-complex-explore-label"><span>Explore</span></span>
+                </a>
+                <a id="x-complex-notifications-control" href="/notifications"
+                   style="display:flex;width:210px;height:42px">
+                  <span id="x-complex-notifications-label">
+                    <span>Notifications</span>
+                  </span>
+                  <span class="notification-badge">9</span>
+                </a>
+                <a id="x-complex-messages-control" href="/messages"
+                   style="display:flex;width:210px;height:42px">
+                  <span id="x-complex-messages-label">Messages</span>
+                </a>
+              </div>
+            </header>
+            <main id="x-complex-main"
+                  style="display:block;width:700px;height:680px;margin-left:24px">
+              <article id="x-complex-post">
+                <div id="x-complex-post-text"
+                     data-testid="tweetText"
+                     lang="en"
+                     dir="auto">
+                  The timeline remains readable while complex navigation labels are translated.
+                </div>
+              </article>
+            </main>
+          </div>
+        `;
+
+        const context = scanner.createScanContext({ scope: 'smart', site: 'x' });
+        const candidates = scanner.collectPageCandidates('smart', {
+          context,
+          site: 'x'
+        });
+        const ids = candidates.map(candidate => candidate.element.id).filter(Boolean);
+
+        for (const expected of [
+          'x-complex-home-label',
+          'x-complex-explore-label',
+          'x-complex-notifications-label',
+          'x-complex-messages-label',
+          'x-complex-post-text'
+        ]) {
+          assert(ids.includes(expected),
+            `complex X-like scan omitted ${expected}: ${ids.join(', ')}`);
+        }
+        for (const excluded of [
+          'x-complex-home-control',
+          'x-complex-explore-control',
+          'x-complex-notifications-control',
+          'x-complex-messages-control'
+        ]) {
+          assert(!ids.includes(excluded),
+            `complex X-like scan selected composite control ${excluded}`);
+        }
+        assert(candidates.filter(candidate => (
+          candidate.element.id === 'x-complex-home-label'
+        )).length === 1, 'one complex control produced duplicate label candidates');
+
+        const laterRoot = document.createElement('div');
+        laterRoot.id = 'x-complex-later-root';
+        laterRoot.innerHTML = `
+          <a id="x-complex-jobs-control" href="/jobs"
+             style="display:flex;width:210px;height:42px">
+            <span id="x-complex-jobs-label"><span>Jobs</span></span>
+            <span class="notification-badge">2</span>
+          </a>
+        `;
+        document.querySelector('#x-complex-nav').append(laterRoot);
+        const dynamicNavigation = scanner.collectDynamicCandidates(
+          laterRoot,
+          'smart',
+          { context, site: 'x' }
+        ).map(candidate => candidate.element.id);
+        assert(dynamicNavigation.includes('x-complex-jobs-label'),
+          `dynamic complex navigation was omitted: ${dynamicNavigation.join(', ')}`);
+        assert(!dynamicNavigation.includes('x-complex-jobs-control'),
+          'dynamic complex navigation selected its composite control');
+
+        const virtualizedPost = document.createElement('x-timeline-cell');
+        virtualizedPost.id = 'x-complex-virtualized-cell';
+        virtualizedPost.innerHTML = `
+          <article id="x-complex-later-post">
+            <div id="x-complex-later-post-text"
+                 data-testid="tweetText"
+                 lang="en"
+                 dir="auto">
+              A newly virtualized post is translated after scrolling.
+            </div>
+          </article>
+        `;
+        document.body.append(virtualizedPost);
+        const dynamicPost = scanner.collectDynamicCandidates(
+          virtualizedPost,
+          'smart',
+          { context, site: 'x' }
+        ).map(candidate => candidate.element.id);
+        assert(dynamicPost.includes('x-complex-later-post-text'),
+          `dynamic virtualized post was omitted: ${dynamicPost.join(', ')}`);
+      });
+
+      test('plain text documents are recognized without opening ordinary HTML pre blocks', () => {
+        document.body.innerHTML = '<pre id="plain-document">Plain text page content that should be translated.</pre>';
+        assert(scanner.isPlainTextDocument(document), 'body-only pre document was not recognized as plain text');
+        const plain = scan('smart');
+        assert(plain.candidates[0]?.kind === 'plain-text',
+          'plain-text candidate kind was not preserved');
+        assert(plain.ids.includes('plain-document'), 'plain-text document was not collected');
+
+        document.body.innerHTML = '<main id="html-main"><pre id="code-sample">const value = 1;</pre><p id="html-copy">This is ordinary HTML around a code block.</p></main>';
+        assert(!scanner.isPlainTextDocument(document), 'ordinary HTML document was misclassified as plain text');
+        const html = scan('smart');
+        assert(html.ids.includes('html-copy'), 'ordinary HTML prose was not collected');
+        assert(!html.ids.includes('code-sample'), 'ordinary HTML pre block was opened for translation');
+      });
+
+      test('smart scope falls back to body when the selected root yields no candidates', () => {
+        document.body.innerHTML = `
+          <article id="empty-selected-root">
+            <p id="detector-only-hidden-copy"
+               style="opacity:0;height:100px">
+              This hidden article copy gives the detector enough prose evidence
+              to select the article even though no visible unit can be translated.
+            </p>
+          </article>
+          <div id="body-fallback-shell">
+            <p id="body-fallback-copy">
+              Visible fallback content outside the selected article must still be translated.
+            </p>
+          </div>
+        `;
+
+        const result = scan('smart');
+        assert(result.context.contentRootDetection?.root?.id === 'empty-selected-root',
+          'fixture did not select the intentionally empty smart root');
+        assert(result.ids.includes('body-fallback-copy'),
+          'body fallback did not recover visible content outside the empty root');
+        assert(!result.ids.includes('detector-only-hidden-copy'),
+          'body fallback translated hidden content');
+        assert(result.context.contentRoot === document.body,
+          'fallback did not promote document.body as the active content root');
+        assert(result.context.stats.emptyRootBodyFallback === 1,
+          'empty-root body fallback was not recorded in scan diagnostics');
+        const candidate = result.candidates.find(item => item.element.id === 'body-fallback-copy');
+        assert(candidate?.container === document.body,
+          'body fallback candidate retained the empty root as its container');
+      });
+
+      const failures = [];
+      for (const item of tests) {
+        try {
+          item.fn();
+        } catch (error) {
+          failures.push({ name: item.name, error: error.stack || error.message });
+        }
+      }
+      return { total: tests.length, failures };
+    };
+  </script>
+</body>
+</html>

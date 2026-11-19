@@ -1,0 +1,546 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Translation core browser tests</title>
+</head>
+<body>
+  <script src="../shared/prompt-policy.js"></script>
+  <script src="../shared/translation-core.js"></script>
+  <script>
+    (() => {
+      const core = window.OITTranslationCore;
+      const tokenPattern = /\[\[OIT-[A-Z0-9]+:(?:OPEN|CLOSE|ATOM):\d+\]\]/g;
+      const tests = [];
+
+      function assert(condition, message) {
+        if (!condition) throw new Error(message);
+      }
+
+      function assertThrows(fn, message) {
+        let threw = false;
+        try {
+          fn();
+        } catch (error) {
+          threw = true;
+        }
+        assert(threw, message);
+      }
+
+      function pseudoTranslate(source) {
+        return source
+          .split(/(\[\[OIT-[A-Z0-9]+:(?:OPEN|CLOSE|ATOM):\d+\]\])/g)
+          .map((part, index) => index % 2 === 1
+            ? part
+            : part.replace(/[A-Za-z]+/g, match => `译${match}`))
+          .join('');
+      }
+
+      function test(name, fn) {
+        tests.push({ name, fn });
+      }
+
+      test('structured inline markup keeps protected DOM shape', () => {
+        document.body.innerHTML = '<p id="host">Read <a id="link" href="/docs"><strong>docs</strong></a> now.</p>';
+        const host = document.querySelector('#host');
+        const originalLink = document.querySelector('#link');
+        const template = core.buildInlineTemplate(host);
+        const record = core.createTranslationView(host, pseudoTranslate(template.text), template, {
+          showOriginal: true
+        });
+        const translatedLink = host.querySelector(':scope > .oit-translation a');
+
+        assert(template.tokenSequence.filter(token => token.includes(':OPEN:')).length === 2,
+          'expected two OPEN tokens for nested markup');
+        assert(template.tokenSequence.filter(token => token.includes(':CLOSE:')).length === 2,
+          'expected two CLOSE tokens for nested markup');
+        assert(translatedLink && translatedLink !== originalLink, 'translation must use a cloned link');
+        assert(translatedLink.getAttribute('href') === '/docs', 'safe link target must be preserved');
+        assert(translatedLink.querySelector('strong'), 'nested strong markup must be preserved');
+        assert(host.querySelector('#link') === originalLink, 'original link identity changed');
+
+        core.restoreTranslationView(record);
+        assert(host.querySelector('#link') === originalLink, 'restore changed original link identity');
+        assert(!host.querySelector(':scope > .oit-translation'), 'translation was not removed');
+      });
+
+      test('multiple line breaks and mixed inline markup keep their protected order', () => {
+        document.body.innerHTML = '<p id="host">Read <a id="link" href="/guide"><strong>the guide</strong></a><br id="break-a"><br id="break-b">Use <em>care</em> with <code id="inline-code">x = 1</code> and <span class="math" id="inline-math">x²</span>.</p>';
+        const host = document.querySelector('#host');
+        const sourceNodes = {
+          link: document.querySelector('#link'),
+          code: document.querySelector('#inline-code'),
+          math: document.querySelector('#inline-math'),
+          breaks: Array.from(host.querySelectorAll('br'))
+        };
+        const template = core.buildInlineTemplate(host);
+        const atomCount = template.tokenSequence
+          .filter(token => token.includes(':ATOM:'))
+          .length;
+
+        assert(atomCount === 4, `expected two breaks plus code and math atoms, got ${atomCount}`);
+        const record = core.createTranslationView(host, pseudoTranslate(template.text), template, {
+          showOriginal: true
+        });
+        const translation = host.querySelector(':scope > .oit-translation');
+
+        assert(translation.querySelectorAll('br').length === 2,
+          'translated markup lost a line break');
+        assert(translation.querySelector('a')?.getAttribute('href') === '/guide',
+          'mixed inline link target changed');
+        assert(translation.querySelector('strong em') === null
+          && translation.querySelector('strong') && translation.querySelector('em'),
+        'mixed inline element order changed');
+        assert(translation.querySelector('code')?.textContent === 'x = 1',
+          'inline code changed in translated markup');
+        assert(translation.querySelector('.math')?.textContent === 'x²',
+          'inline math changed in translated markup');
+
+        core.restoreTranslationView(record);
+        assert(document.querySelector('#link') === sourceNodes.link,
+          'restore replaced the mixed inline link');
+        assert(document.querySelector('#inline-code') === sourceNodes.code,
+          'restore replaced inline code');
+        assert(document.querySelector('#inline-math') === sourceNodes.math,
+          'restore replaced inline math');
+        assert(Array.from(host.querySelectorAll('br')).every(
+          (node, index) => node === sourceNodes.breaks[index]
+        ), 'restore replaced a source line break');
+      });
+
+      test('code and math remain protected atoms', () => {
+        document.body.innerHTML = '<p id="host">Use <code id="code">const x = 1;</code> and <span class="math" id="math">x²</span>.</p>';
+        const host = document.querySelector('#host');
+        const template = core.buildInlineTemplate(host);
+        const atoms = template.tokenSequence
+          .filter(token => token.includes(':ATOM:'))
+          .map(token => template.fragments.get(token).node);
+
+        assert(atoms.length === 2, 'code and math must both be atomic');
+        assert(atoms[0].tagName === 'CODE', 'code atom missing');
+        assert(atoms[1].classList.contains('math'), 'math atom missing');
+
+        const record = core.createTranslationView(host, pseudoTranslate(template.text), template, {
+          showOriginal: true
+        });
+        assert(host.querySelector('.oit-translation code')?.textContent === 'const x = 1;',
+          'code text changed in translation');
+        assert(host.querySelector('.oit-translation .math')?.textContent === 'x²',
+          'math text changed in translation');
+        core.restoreTranslationView(record);
+      });
+
+      test('long prose styled as code is translatable', () => {
+        document.body.innerHTML = '<p id="host">This is <code>a long natural language sentence with enough words to look like prose and it should be translated normally.</code></p>';
+        const template = core.buildInlineTemplate(document.querySelector('#host'));
+        const kinds = template.tokenSequence.map(token => token.split(':')[1]);
+
+        assert(kinds.includes('OPEN') && kinds.includes('CLOSE'), 'prose code must not be an atom');
+        assert(!kinds.includes('ATOM'), 'prose code was incorrectly protected');
+      });
+
+      test('missing, reordered, and unbalanced tokens are rejected', () => {
+        document.body.innerHTML = '<p id="host">A <strong>B</strong> C.</p>';
+        const template = core.buildInlineTemplate(document.querySelector('#host'));
+        const translated = pseudoTranslate(template.text);
+        const [first, second] = template.tokenSequence;
+        const missing = translated.replace(first, '');
+        const reordered = translated
+          .replace(first, '__TEMP__')
+          .replace(second, first)
+          .replace('__TEMP__', second);
+        const unbalanced = translated.replace(second, '');
+
+        assert(core.validateProtectedTranslation(template.text, translated), 'valid token sequence failed');
+        assert(!core.validateProtectedTranslation(template.text, missing), 'missing token accepted');
+        assert(!core.validateProtectedTranslation(template.text, reordered), 'reordered token accepted');
+        assertThrows(
+          () => core.renderProtectedTranslation(unbalanced, template, document),
+          'unbalanced token sequence rendered'
+        );
+      });
+
+      test('unsafe cloned URL and event attributes are removed', () => {
+        document.body.innerHTML = '<p id="host">Read <span id="nest" onmouseover="alert(1)"><a id="bad" href="java\nscript:alert(2)" onclick="alert(3)">this</a></span>.</p>';
+        const host = document.querySelector('#host');
+        const template = core.buildInlineTemplate(host);
+        const record = core.createTranslationView(host, pseudoTranslate(template.text), template, {
+          showOriginal: true
+        });
+        const clonedSpan = host.querySelector(':scope > .oit-translation > span');
+        const clonedLink = clonedSpan?.querySelector('a');
+
+        assert(clonedLink, 'safe link clone missing');
+        assert(!clonedLink.hasAttribute('href'), 'javascript URL was cloned');
+        assert(!clonedLink.hasAttribute('onclick'), 'event handler was cloned');
+        assert(!clonedSpan.hasAttribute('onmouseover'), 'nested event handler was cloned');
+        core.restoreTranslationView(record);
+      });
+
+      test('bilingual restore preserves original node identity', () => {
+        document.body.innerHTML = '<p id="host">Hello <strong id="original">world</strong>.</p>';
+        const host = document.querySelector('#host');
+        const originalText = host.firstChild;
+        const originalStrong = document.querySelector('#original');
+        const template = core.buildInlineTemplate(host);
+        const record = core.createTranslationView(host, pseudoTranslate(template.text), template, {
+          showOriginal: true
+        });
+
+        core.restoreTranslationView(record);
+        assert(host.firstChild === originalText, 'bilingual restore replaced the text node');
+        assert(host.querySelector('#original') === originalStrong, 'bilingual restore replaced strong');
+      });
+
+      test('single-language restore preserves original text-node identity and position', () => {
+        document.body.innerHTML = '<p id="host">Hello <strong id="original">world</strong>.</p>';
+        const host = document.querySelector('#host');
+        const originalText = host.firstChild;
+        const originalStrong = document.querySelector('#original');
+        const template = core.buildInlineTemplate(host);
+        const record = core.createTranslationView(host, pseudoTranslate(template.text), template, {
+          showOriginal: false
+        });
+
+        assert(record.originalWrapper, 'single-language mode did not hide the original wrapper');
+        core.restoreTranslationView(record);
+        assert(host.firstChild === originalText, 'single-language restore changed text-node position');
+        assert(host.querySelector('#original') === originalStrong, 'single-language restore replaced strong');
+        assert(!host.querySelector('.oit-original-hidden'), 'hidden original wrapper was not removed');
+      });
+
+      test('changed source DOM is rejected before translation is applied', () => {
+        document.body.innerHTML = '<p id="host">Original text.</p>';
+        const host = document.querySelector('#host');
+        const template = core.buildInlineTemplate(host);
+        host.append(' Changed.');
+
+        assertThrows(
+          () => core.createTranslationView(host, pseudoTranslate(template.text), template, { showOriginal: true }),
+          'changed source DOM was accepted'
+        );
+      });
+
+      test('strict JSON batch protocol preserves item count and order', () => {
+        const parsed = core.parseBatchTranslations(
+          '```json\n["第一项", "第二项"]\n```',
+          2
+        );
+
+        assert(parsed[0] === '第一项' && parsed[1] === '第二项',
+          'valid batch was reordered or rewritten');
+        assertThrows(
+          () => core.parseBatchTranslations('["only one"]', 2),
+          'batch count mismatch was accepted'
+        );
+        assertThrows(
+          () => core.parseBatchTranslations('{"translations":["one",2]}', 2),
+          'non-string batch item was accepted'
+        );
+      });
+
+      test('protected token validation rejects duplicates and moved atoms', () => {
+        const source = 'Use [[OIT-A:ATOM:0]] and [[OIT-A:ATOM:1]].';
+        const duplicated = '使用 [[OIT-A:ATOM:0]] [[OIT-A:ATOM:0]] 立即。';
+        const moved = '使用 [[OIT-A:ATOM:1]] 和 [[OIT-A:ATOM:0]]。';
+
+        assert(core.validateProtectedTranslation(source, '使用 [[OIT-A:ATOM:0]] 和 [[OIT-A:ATOM:1]]。'),
+          'valid protected translation was rejected');
+        assert(!core.validateProtectedTranslation(source, duplicated),
+          'duplicated protected token was accepted');
+        assert(!core.validateProtectedTranslation(source, moved),
+          'moved protected token was accepted');
+      });
+
+      test('flex and grid labels share one layout item and restore text identity', () => {
+        for (const display of ['flex', 'grid']) {
+          document.body.innerHTML = `<button id="host" style="display:${display}"><svg aria-hidden="true"></svg>Save changes</button>`;
+          const host = document.querySelector('#host');
+          const icon = host.firstChild;
+          const sourceText = host.lastChild;
+          const template = core.buildInlineTemplate(host);
+          const record = core.createTranslationView(host, pseudoTranslate(template.text), template, {
+            showOriginal: true
+          });
+          const flow = host.querySelector(':scope > .oit-original-flow');
+
+          assert(flow, `${display} direct text was not wrapped as one flow item`);
+          assert(flow.firstChild === sourceText, `${display} source text identity changed`);
+          assert(flow.querySelector(':scope > .oit-translation'), `${display} translation left the text flow item`);
+          assert(host.firstChild === icon, `${display} icon moved`);
+          assert(getComputedStyle(host).display.includes(display), `${display} host display changed`);
+
+          core.restoreTranslationView(record);
+          assert(host.lastChild === sourceText, `${display} restore did not return the original text node`);
+          assert(host.querySelector('.oit-original-flow') === null, `${display} flow wrapper was not removed`);
+        }
+      });
+
+      test('nested navigation labels keep anchor and button identity', () => {
+        document.body.innerHTML = `
+          <nav>
+            <a id="account-control" href="/alice"
+               style="display:flex;align-items:center;gap:8px;height:38px;overflow:hidden">
+              <svg id="account-icon" aria-hidden="true"></svg>
+              <span id="account-label"><span>Account</span></span>
+              <span aria-hidden="true">...</span>
+            </a>
+            <button id="compose-control" type="button"
+                    style="display:flex;align-items:center;gap:8px;height:42px;overflow:hidden">
+              <svg id="compose-icon" aria-hidden="true"></svg>
+              <span id="compose-label">Post</span>
+            </button>
+          </nav>
+        `;
+        const accountControl = document.querySelector('#account-control');
+        const accountIcon = document.querySelector('#account-icon');
+        const accountLabel = document.querySelector('#account-label');
+        const composeControl = document.querySelector('#compose-control');
+        const composeIcon = document.querySelector('#compose-icon');
+        const composeLabel = document.querySelector('#compose-label');
+        let clicks = 0;
+        accountControl.addEventListener('click', event => {
+          event.preventDefault();
+          clicks++;
+        });
+
+        const accountTemplate = core.buildInlineTemplate(accountLabel);
+        const accountRecord = core.createTranslationView(
+          accountLabel,
+          pseudoTranslate(accountTemplate.text),
+          accountTemplate,
+          { showOriginal: true }
+        );
+        const composeTemplate = core.buildInlineTemplate(composeLabel);
+        const composeRecord = core.createTranslationView(
+          composeLabel,
+          pseudoTranslate(composeTemplate.text),
+          composeTemplate,
+          { showOriginal: true }
+        );
+
+        assert(document.querySelector('#account-control') === accountControl,
+          'navigation translation replaced the account anchor');
+        assert(document.querySelector('#compose-control') === composeControl,
+          'navigation translation replaced the compose button');
+        assert(accountControl.querySelector(':scope > #account-icon') === accountIcon
+          && composeControl.querySelector(':scope > #compose-icon') === composeIcon,
+        'navigation translation moved control icons');
+        assert(accountLabel.querySelector('.oit-translation'),
+          'account translation was not inserted inside its nested label');
+        assert(composeLabel.querySelector('.oit-translation'),
+          'compose translation was not inserted inside its label');
+        assert(!accountControl.matches('.oit-translated-host')
+          && !composeControl.matches('.oit-translated-host'),
+        'navigation translation replaced composite control hosts');
+
+        accountControl.click();
+        assert(clicks === 1, 'navigation translation removed the anchor listener');
+
+        core.restoreTranslationView(accountRecord);
+        core.restoreTranslationView(composeRecord);
+        assert(document.querySelector('#account-control') === accountControl
+          && document.querySelector('#compose-control') === composeControl,
+        'navigation restore changed control identity');
+        assert(accountLabel.textContent === 'Account' && composeLabel.textContent === 'Post',
+          'navigation restore did not return source labels');
+      });
+
+      test('fixed-height title releases only the nearby text branch', () => {
+        document.body.innerHTML = '<a id="card" style="display:grid;height:150px"><div id="title" style="height:24px;min-height:24px;line-height:24px;font-size:16px;max-height:24px"><span id="label">Wikipedia</span></div><p>Description text</p></a>';
+        const title = document.querySelector('#title');
+        const card = document.querySelector('#card');
+        const label = document.querySelector('#label');
+        const template = core.buildInlineTemplate(label);
+        const record = core.createTranslationView(label, pseudoTranslate(template.text), template, {
+          showOriginal: true
+        });
+
+        assert(title.style.height === 'auto', 'fixed title height was not released');
+        assert(title.style.minHeight === '24px', 'title minimum height was not retained');
+        assert(title.style.maxHeight === 'none', 'title max-height still clips the translation');
+        assert(card.style.height === '150px', 'outer card height was changed');
+
+        core.restoreTranslationView(record);
+        assert(title.getAttribute('style') === 'height:24px;min-height:24px;line-height:24px;font-size:16px;max-height:24px',
+          'title style was not restored exactly');
+      });
+
+      test('line-clamped copy keeps the same line budget for both languages', () => {
+        document.body.innerHTML = '<section id="clip" style="display:-webkit-box;overflow:hidden;-webkit-line-clamp:2;-webkit-box-orient:vertical"><p id="host">An original <a href="/story">story summary</a> with more content.</p></section>';
+        const clip = document.querySelector('#clip');
+        const host = document.querySelector('#host');
+        const link = host.querySelector('a');
+        const originalHtml = host.innerHTML;
+        const originalStyle = clip.getAttribute('style');
+        const template = core.buildInlineTemplate(host);
+        const record = core.createTranslationView(host, pseudoTranslate(template.text), template, {
+          showOriginal: true
+        });
+        const source = host.querySelector(':scope > .oit-original-flow');
+        const translation = host.querySelector(':scope > .oit-translation');
+
+        assert(source && translation, 'clipped source and translation were not separated');
+        assert(host.querySelector('a') === link, 'clipping changed the original link identity');
+        assert(source.style.getPropertyValue('-webkit-line-clamp') === '2', 'source line clamp changed');
+        assert(translation.style.getPropertyValue('-webkit-line-clamp') === '2', 'translation line clamp changed');
+        assert(clip.style.getPropertyValue('-webkit-line-clamp') === 'unset', 'outer clamp still truncates both languages');
+
+        core.restoreTranslationView(record);
+        assert(host.innerHTML === originalHtml, 'clipped source structure was not restored');
+        assert(clip.getAttribute('style') === originalStyle, 'clipping style was not restored');
+      });
+
+      test('scrollable, positioned, large, and media containers keep their constraints', () => {
+        const cases = [
+          '<div id="host" style="height:24px;line-height:24px;overflow-y:auto"><span>Short title</span></div>',
+          '<div id="host" style="height:24px;line-height:24px;position:absolute"><span>Short title</span></div>',
+          '<div id="host" style="height:600px;line-height:24px"><span>Short title</span></div>',
+          '<a id="host" style="height:100px;line-height:24px"><img src="data:image/gif;base64,R0lGODlhAQABAAAAACw="><span>Short title</span></a>'
+        ];
+        for (const html of cases) {
+          document.body.innerHTML = html;
+          const host = document.querySelector('#host');
+          const originalStyle = host.getAttribute('style');
+          const template = core.buildInlineTemplate(host);
+          const record = core.createTranslationView(host, pseudoTranslate(template.text), template, {
+            showOriginal: true
+          });
+          assert(host.getAttribute('style') === originalStyle, `protected container was changed: ${originalStyle}`);
+          core.restoreTranslationView(record);
+        }
+      });
+
+      test('shared card layout ownership survives independent restores', () => {
+        document.body.innerHTML = '<a href="/case"><div id="frame" style="display:flex;flex-direction:column;overflow:hidden;height:100%"><div id="head" style="display:flex;flex-direction:column;overflow:hidden;height:120px"><div id="title" style="line-height:24px">A customer story title</div></div><div id="foot" style="display:flex;flex-direction:column;overflow:hidden;height:80px"><div id="description" style="line-height:20px">Increase in daily active users</div></div></div></a>';
+        const frame = document.querySelector('#frame');
+        const head = document.querySelector('#head');
+        const foot = document.querySelector('#foot');
+        const title = document.querySelector('#title');
+        const description = document.querySelector('#description');
+        const original = document.body.innerHTML;
+        const titleTemplate = core.buildInlineTemplate(title);
+        const descriptionTemplate = core.buildInlineTemplate(description);
+        const titleRecord = core.createTranslationView(title, pseudoTranslate(titleTemplate.text), titleTemplate, {
+          showOriginal: true
+        });
+        const descriptionRecord = core.createTranslationView(description, pseudoTranslate(descriptionTemplate.text), descriptionTemplate, {
+          showOriginal: true
+        });
+
+        assert(head.style.height === 'auto' && foot.style.height === 'auto',
+          'independent card branches were not released');
+        assert(frame.style.minHeight === 'min-content', 'shared card frame did not receive flow ownership');
+        core.restoreTranslationView(titleRecord);
+        assert(head.style.height === '120px', 'title branch was not restored');
+        assert(frame.style.minHeight === 'min-content', 'shared frame restored before its last owner');
+        core.restoreTranslationView(descriptionRecord);
+        assert(document.body.innerHTML === original, 'shared card layout was not restored exactly');
+      });
+
+      test('translation-only mode rewrites Text nodes without replacing controls or listeners', () => {
+        document.body.innerHTML = '<button id="host" style="display:inline-flex"><svg aria-hidden="true"></svg><span id="label">Save changes</span></button>';
+        const host = document.querySelector('#host');
+        const label = document.querySelector('#label');
+        const sourceText = label.firstChild;
+        const icon = host.firstChild;
+        let clicks = 0;
+        host.addEventListener('click', () => clicks++);
+        host.focus();
+        const prepared = core.buildTextFlowTemplate(host);
+        const record = core.applyTranslationInPlace(host, pseudoTranslate(prepared.text), prepared);
+
+        assert(record?.kind === 'in-place', 'translation-only record was not created');
+        assert(host.firstChild === icon, 'translation-only mode replaced the icon');
+        assert(label.firstChild === sourceText, 'translation-only mode replaced the Text node');
+        assert(sourceText.data.includes('译'), 'translation-only mode did not update text');
+        assert(document.activeElement === host, 'translation-only mode lost focus');
+        host.click();
+        assert(clicks === 1, 'translation-only mode broke the existing click listener');
+
+        core.restoreTranslationView(record);
+        assert(sourceText.data === 'Save changes', 'translation-only restore changed the original text');
+        assert(host.firstChild === icon && label.firstChild === sourceText,
+          'translation-only restore changed control identity');
+      });
+
+      test('translation-only protocol rejects missing slots without touching the source DOM', () => {
+        document.body.innerHTML = '<p id="host">Read <a href="/docs">the docs</a> now.</p>';
+        const host = document.querySelector('#host');
+        const link = host.querySelector('a');
+        const prepared = core.buildTextFlowTemplate(host);
+        const broken = prepared.text.replace(prepared.slotTokens[1], '');
+        const record = core.applyTranslationInPlace(host, broken, prepared);
+
+        assert(record === null, 'translation-only mode accepted a missing structure slot');
+        assert(host.textContent === 'Read the docs now.', 'invalid translation changed source text');
+        assert(host.querySelector('a') === link, 'invalid translation replaced the link');
+      });
+
+      test('valid translation-only updates preserve links, listeners, focus, and Text node identity', () => {
+        document.body.innerHTML = '<p id="host">Read <a id="docs" href="/docs">the documentation</a> before <strong>continuing</strong>.</p>';
+        const host = document.querySelector('#host');
+        const link = document.querySelector('#docs');
+        const sourceTextNodes = [];
+        const walker = document.createTreeWalker(host, NodeFilter.SHOW_TEXT);
+        let node;
+        while ((node = walker.nextNode())) {
+          if (/\S/.test(node.data)) sourceTextNodes.push(node);
+        }
+        let clicks = 0;
+        link.addEventListener('click', event => {
+          event.preventDefault();
+          clicks++;
+        });
+        link.focus();
+        const prepared = core.buildTextFlowTemplate(host);
+        const record = core.applyTranslationInPlace(host, pseudoTranslate(prepared.text), prepared);
+
+        assert(record?.kind === 'in-place', 'valid translation-only update was rejected');
+        assert(document.querySelector('#docs') === link, 'translation-only update replaced the link');
+        assert(link.getAttribute('href') === '/docs', 'translation-only update changed the link target');
+        assert(document.activeElement === link, 'translation-only update lost link focus');
+        link.click();
+        assert(clicks === 1, 'translation-only update removed the link listener');
+        assert(sourceTextNodes.every(text => text.isConnected && /\S/.test(text.data)),
+          'translation-only update replaced a source Text node');
+        assert(sourceTextNodes.some(text => text.data.includes('译')),
+          'translation-only update did not rewrite source Text nodes');
+
+        core.restoreTranslationView(record);
+        assert(sourceTextNodes.every(text => text.isConnected && !text.data.includes('译')),
+          'translation-only restore did not preserve Text node identity');
+        assert(document.querySelector('#docs') === link && link.getAttribute('href') === '/docs',
+          'translation-only restore changed the link');
+      });
+
+      test('translation-only restore ignores website updates to translated Text nodes', () => {
+        document.body.innerHTML = '<p id="host">Original website copy.</p>';
+        const host = document.querySelector('#host');
+        const prepared = core.buildTextFlowTemplate(host);
+        const record = core.applyTranslationInPlace(host, pseudoTranslate(prepared.text), prepared);
+        const text = record.texts[0].node;
+        text.data = 'Updated by the website.';
+
+        core.restoreTranslationView(record);
+        assert(text.data === 'Updated by the website.', 'restore overwrote a later website update');
+      });
+
+      window.runKernelTests = () => {
+        const failures = [];
+        for (const item of tests) {
+          try {
+            item.fn();
+          } catch (error) {
+            failures.push({ name: item.name, error: error.stack || error.message });
+          }
+        }
+        return {
+          total: tests.length,
+          failures
+        };
+      };
+    })();
+  </script>
+</body>
+</html>

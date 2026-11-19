@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Translation scheduler browser tests</title>
+</head>
+<body>
+  <script src="../shared/translation-scheduler.js"></script>
+  <script>
+    window.runTranslationSchedulerTests = () => {
+      const tests = [];
+      const assert = (condition, message) => {
+        if (!condition) throw new Error(message);
+      };
+      const test = (name, fn) => tests.push({ name, fn });
+
+      test('exports the lane contract through the constructor API', () => {
+        assert(OITTranslationScheduler.LANES?.BODY === 'body',
+          'body lane is missing from the constructor API');
+        assert(OITTranslationScheduler.LANES?.ADAPTIVE === 'adaptive',
+          'adaptive lane is missing from the constructor API');
+        assert(OITTranslationScheduler.LANES?.SUPPLEMENTAL === 'supplemental',
+          'supplemental lane is missing from the constructor API');
+      });
+
+      test('body work cannot consume adaptive or supplemental reserve slots', () => {
+        const scheduler = new OITTranslationScheduler({
+          maxConcurrent: 5,
+          adaptiveReserve: 1,
+          supplementalReserve: 1
+        });
+
+        assert(scheduler.acquire('body'), 'first body lane was rejected');
+        assert(scheduler.acquire('body'), 'second body lane was rejected');
+        assert(scheduler.acquire('body'), 'third body lane was rejected');
+        assert(!scheduler.acquire('body'),
+          'body work consumed a reserved UI or supplemental slot');
+        assert(scheduler.acquire('adaptive'),
+          'adaptive UI could not use its reserved slot');
+        assert(scheduler.acquire('supplemental'),
+          'supplemental content could not use its reserved slot');
+
+        const snapshot = scheduler.snapshot();
+        assert(snapshot.active.total === 5,
+          `expected five active requests, got ${snapshot.active.total}`);
+        assert(snapshot.active.body === 3,
+          `expected three body requests, got ${snapshot.active.body}`);
+        assert(snapshot.active.adaptive === 1,
+          `expected one adaptive request, got ${snapshot.active.adaptive}`);
+        assert(snapshot.active.supplemental === 1,
+          `expected one supplemental request, got ${snapshot.active.supplemental}`);
+      });
+
+      test('releasing an adaptive request immediately restores adaptive capacity', () => {
+        const scheduler = new OITTranslationScheduler({ maxConcurrent: 3 });
+        assert(scheduler.acquire('body'), 'first body lane was rejected');
+        assert(scheduler.acquire('body'), 'second body lane was rejected');
+        assert(scheduler.acquire('adaptive'), 'adaptive lane was rejected');
+        assert(!scheduler.acquire('adaptive'),
+          'adaptive lane exceeded total concurrency');
+
+        assert(scheduler.release('adaptive'), 'adaptive lane did not release');
+        assert(scheduler.acquire('adaptive'),
+          'adaptive lane remained blocked after release');
+      });
+
+      test('adaptive work may use surplus capacity when body work is absent', () => {
+        const scheduler = new OITTranslationScheduler({ maxConcurrent: 3 });
+        assert(scheduler.acquire('adaptive'), 'first adaptive lane was rejected');
+        assert(scheduler.acquire('adaptive'), 'second adaptive lane was rejected');
+        assert(scheduler.acquire('adaptive'), 'third adaptive lane was rejected');
+        assert(!scheduler.acquire('adaptive'),
+          'adaptive work exceeded total concurrency');
+      });
+
+      test('omitting supplementalReserve preserves the legacy body capacity', () => {
+        const scheduler = new OITTranslationScheduler({
+          maxConcurrent: 4,
+          adaptiveReserve: 1
+        });
+        const snapshot = scheduler.snapshot();
+        assert(snapshot.supplementalReserve === 0,
+          `omitted supplemental reserve became ${snapshot.supplementalReserve}`);
+        assert(snapshot.bodyLimit === 3,
+          `omitted supplemental reserve changed body limit to ${snapshot.bodyLimit}`);
+      });
+
+      test('reset releases every active lane and restores configured limits', () => {
+        const scheduler = new OITTranslationScheduler({
+          maxConcurrent: 5,
+          supplementalReserve: 1
+        });
+        scheduler.acquire('body');
+        scheduler.acquire('body');
+        scheduler.acquire('adaptive');
+        scheduler.acquire('supplemental');
+
+        scheduler.reset();
+        const snapshot = scheduler.snapshot();
+        assert(snapshot.active.total === 0
+            && snapshot.active.body === 0
+            && snapshot.active.adaptive === 0
+            && snapshot.active.supplemental === 0,
+        'reset left active scheduler lanes behind');
+        assert(snapshot.maxConcurrent === 5,
+          'reset discarded the configured concurrency limit');
+        assert(snapshot.bodyLimit === 3,
+          `reset produced an unexpected body limit: ${snapshot.bodyLimit}`);
+      });
+
+      test('single-slot configurations keep the lane usable without a negative body limit', () => {
+        const scheduler = new OITTranslationScheduler({ maxConcurrent: 1 });
+        assert(scheduler.acquire('body'), 'single body lane was rejected');
+        assert(!scheduler.acquire('adaptive'),
+          'single-slot scheduler exceeded its total concurrency');
+        scheduler.release('body');
+        assert(scheduler.acquire('adaptive'),
+          'adaptive work could not use the released single slot');
+        assert(scheduler.snapshot().bodyLimit === 1,
+          'single-slot scheduler produced an invalid body limit');
+      });
+
+      test('shrinking concurrency keeps in-flight work accounted until release', () => {
+        const scheduler = new OITTranslationScheduler({ maxConcurrent: 4 });
+        scheduler.acquire('body');
+        scheduler.acquire('body');
+        scheduler.acquire('body');
+        scheduler.acquire('adaptive');
+
+        const configured = scheduler.configure({ maxConcurrent: 2 });
+        assert(configured.active.total === 4,
+          'configuration change discarded in-flight requests');
+        assert(!scheduler.acquire('body'),
+          'shrunk scheduler admitted body work above its new limit');
+        assert(!scheduler.acquire('adaptive'),
+          'shrunk scheduler admitted work above total concurrency');
+
+        scheduler.release('body');
+        scheduler.release('body');
+        scheduler.release('body');
+        scheduler.release('adaptive');
+        const drained = scheduler.snapshot();
+        assert(drained.active.total === 0,
+          'released in-flight work left stale scheduler accounting');
+        assert(scheduler.acquire('adaptive'),
+          'drained scheduler did not restore availability after reconfiguration');
+      });
+
+      const failures = [];
+      for (const item of tests) {
+        try {
+          item.fn();
+        } catch (error) {
+          failures.push({ name: item.name, error: error.stack || error.message });
+        }
+      }
+      return { total: tests.length, failures };
+    };
+  </script>
+</body>
+</html>

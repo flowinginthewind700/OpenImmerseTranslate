@@ -3,8 +3,6 @@
  * 苹果风格设计：简洁、优雅、精致
  */
 
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;600;700&display=swap');
-
 :root {
   /* 苹果风格色彩 */
   --apple-blue: #007AFF;
@@ -58,7 +56,7 @@ html, body {
 }
 
 body {
-  font-family: 'Inter', 'Noto Sans SC', -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Helvetica Neue', sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', sans-serif;
   font-size: 14px;
   line-height: 1.5;
   color: var(--gray-900);
@@ -94,6 +92,7 @@ body {
   display: flex;
   align-items: center;
   gap: 10px;
+  min-width: 0;
 }
 
 .logo-icon {
@@ -108,11 +107,21 @@ body {
     inset 0 1px 0 rgba(255, 255, 255, 0.2);
 }
 
+.logo-copy {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  min-width: 0;
+}
+
 .logo-text {
   font-size: 17px;
   font-weight: 600;
   color: var(--gray-900);
-  letter-spacing: -0.3px;
+  letter-spacing: 0;
+  line-height: 1.1;
+  white-space: nowrap;
 }
 
 .header-actions {
@@ -407,6 +416,20 @@ body {
 }
 
 /* 翻译中状态 - 动态渐变 */
+.action-btn.session-active {
+  background: linear-gradient(145deg, #FF453A 0%, #FF3B30 50%, #D70015 100%);
+  box-shadow:
+    0 4px 16px rgba(255, 59, 48, 0.35),
+    0 1px 3px rgba(0, 0, 0, 0.1),
+    inset 0 1px 0 rgba(255, 255, 255, 0.2);
+}
+
+.action-btn.session-active:hover {
+  box-shadow:
+    0 8px 24px rgba(255, 59, 48, 0.45),
+    0 2px 6px rgba(0, 0, 0, 0.1);
+}
+
 .action-btn.translating {
   background: linear-gradient(145deg, #FF9F0A 0%, #FF9500 50%, #FF6B00 100%);
   box-shadow: 
@@ -1386,6 +1409,23 @@ body {
 .github-link:active {
   transform: scale(0.95);
   background: rgba(0, 0, 0, 0.08);
+}
+
+.extension-version {
+  display: inline-flex;
+  align-items: center;
+  min-height: 18px;
+  padding: 0 5px;
+  border: 1px solid rgba(60, 60, 67, 0.16);
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--gray-600);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0;
+  white-space: nowrap;
 }
 
 /* GitHub 图标特殊样式 */

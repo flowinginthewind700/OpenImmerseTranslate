@@ -1,0 +1,3314 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Content script integration browser tests</title>
+</head>
+<body>
+  <script>
+    window.chrome = {
+      runtime: {
+        id: 'test-extension',
+        onMessage: { addListener() {} },
+        sendMessage() { return Promise.resolve({ translations: [] }); }
+      },
+      storage: {
+        sync: { get() { return Promise.resolve({}); } },
+        local: { get() { return Promise.resolve({}); }, set() { return Promise.resolve(); } }
+      }
+    };
+  </script>
+  <script src="../shared/content-signals.js"></script>
+  <script src="../shared/content-unitizer.js"></script>
+  <script src="../shared/content-unit-classifier.js"></script>
+  <script src="../shared/content-ui-policy.js"></script>
+  <script src="../shared/content-filter.js"></script>
+  <script src="../shared/content-root-detector.js"></script>
+  <script src="../shared/site-profiles/x.js"></script>
+  <script src="../shared/content-site-adapters.js"></script>
+  <script src="../shared/prompt-policy.js"></script>
+  <script src="../shared/translation-source-state.js"></script>
+  <script src="../shared/translation-core.js"></script>
+  <script src="../shared/page-scanner.js"></script>
+  <script src="../shared/translation-retry-policy.js"></script>
+  <script src="../shared/translation-session.js"></script>
+  <script src="../shared/translation-scheduler.js"></script>
+  <script src="../shared/request-timeout.js"></script>
+  <script src="../shared/providers.js"></script>
+  <script src="../content/content.js"></script>
+  <script>
+    window.runContentIntegrationTests = async () => {
+      const tests = [];
+      const assert = (condition, message) => {
+        if (!condition) throw new Error(message);
+      };
+      const pseudoTranslate = source => source
+        .split(/(\[\[OIT-[A-Z0-9]+:(?:OPEN|CLOSE|ATOM):\d+\]\])/g)
+        .map((part, index) => index % 2 === 1
+          ? part
+          : part.replace(/[A-Za-z]+/g, match => `译${match}`))
+        .join('');
+      const test = (name, fn) => tests.push({ name, fn });
+      const resetContentState = () => {
+        state.fullReset();
+        translationRecords.clear();
+        titleRecord = null;
+      };
+
+      test('batch refresh switches an existing block to translation-only templates', () => {
+        document.body.innerHTML = '<button id="host">Save changes</button>';
+        const host = document.querySelector('#host');
+        const sourceText = host.firstChild;
+        let clicks = 0;
+        host.addEventListener('click', () => clicks++);
+        host.focus();
+
+        state.config = {
+          showOriginal: true,
+          autoDetect: false,
+          targetLang: 'en'
+        };
+        const block = prepareTranslationBlock(host);
+        assert(block && block.inPlaceTemplate === null, 'bilingual block was not prepared');
+
+        state.config = {
+          showOriginal: false,
+          autoDetect: false,
+          targetLang: 'en'
+        };
+        assert(refreshTranslationBlock(block), 'queued block could not be refreshed');
+        assert(block.template === block.inPlaceTemplate,
+          'refreshed block retained the stale bilingual template');
+        assert(applyTranslation(block, pseudoTranslate(block.text)),
+          'refreshed translation-only block was not applied');
+
+        const record = translationRecords.get(host);
+        assert(record?.kind === 'in-place', 'content path did not use in-place translation');
+        assert(host.firstChild === sourceText, 'content path replaced the source Text node');
+        assert(document.activeElement === host, 'content path lost focus');
+        host.click();
+        assert(clicks === 1, 'content path removed the existing click listener');
+
+        removeAllTranslations();
+        assert(host.textContent === 'Save changes', 'translation-only restore changed the source text');
+        assert(host.firstChild === sourceText, 'translation-only restore replaced the source Text node');
+        assert(document.activeElement === host, 'translation-only restore lost focus');
+      });
+
+      test('translation-only content path preserves nested links and exact source markup', () => {
+        document.body.innerHTML = '<p id="host">Read <a id="story" href="/story">the full story</a> now.</p>';
+        const host = document.querySelector('#host');
+        const link = document.querySelector('#story');
+        const textNodes = Array.from(host.childNodes).filter(node => node.nodeType === Node.TEXT_NODE);
+        const originalHtml = host.innerHTML;
+        let clicks = 0;
+        link.addEventListener('click', event => {
+          event.preventDefault();
+          clicks++;
+        });
+        link.focus();
+
+        state.config = {
+          showOriginal: false,
+          autoDetect: false,
+          targetLang: 'en'
+        };
+        const block = prepareTranslationBlock(host);
+        assert(block?.inPlaceTemplate, 'nested-link block did not receive an in-place template');
+        assert(applyTranslation(block, pseudoTranslate(block.text)),
+          'nested-link translation was not applied');
+
+        assert(translationRecords.get(host)?.kind === 'in-place',
+          'nested-link translation did not use in-place mode');
+        assert(document.querySelector('#story') === link, 'nested link identity changed');
+        assert(document.activeElement === link, 'nested link lost focus');
+        link.click();
+        assert(clicks === 1, 'nested link listener was removed');
+        assert(link.textContent.includes('译'), 'nested link label was not translated');
+
+        removeAllTranslations();
+        assert(host.innerHTML === originalHtml, 'nested-link source markup was not restored exactly');
+        assert(document.querySelector('#story') === link, 'restore replaced the nested link');
+        assert(Array.from(host.childNodes).filter(node => node.nodeType === Node.TEXT_NODE)
+          .every((node, index) => node === textNodes[index]),
+        'restore replaced direct source Text nodes');
+        assert(document.activeElement === link, 'restore lost nested-link focus');
+      });
+
+      test('unitized mixed text translates safely and unwraps to the exact source nodes', () => {
+        resetContentState();
+        document.body.innerHTML = `
+          <main>
+            <div id="mixed">
+              Read <a id="guide" href="/guide">the guide</a> before continuing.
+              <p id="nested">The nested paragraph remains independent.</p>
+              <button id="save">Save changes</button>
+            </div>
+          </main>
+        `;
+        const mixed = document.querySelector('#mixed');
+        const guide = document.querySelector('#guide');
+        const sourceNodes = Array.from(mixed.childNodes);
+        state.config = {
+          showOriginal: false,
+          autoDetect: false,
+          targetLang: 'en',
+          translationScope: 'full'
+        };
+        state.scope = 'full';
+
+        const blocks = collectViewportBlocks();
+        const block = blocks.find(candidate => (
+          candidate.element.matches?.('.oit-direct-text-run')
+        ));
+        assert(block, 'mixed direct text was not prepared as a content block');
+        assert(block.element.contains(guide), 'prepared content unit lost its inline link');
+        assert(applyTranslation(block, pseudoTranslate(block.text)),
+          'unitized mixed text was not translated');
+        assert(guide.textContent.includes('译'), 'inline link label was not translated');
+
+        removeAllTranslations();
+        assert(!mixed.querySelector('.oit-direct-text-run'),
+          'restore left a synthetic direct-text-run wrapper behind');
+        assert(document.querySelector('#guide') === guide, 'restore replaced the inline link');
+        assert(Array.from(mixed.childNodes).every(
+          (node, index) => node === sourceNodes[index]
+        ), 'restore changed direct source node identity or order');
+        assert(mixed.textContent.includes('Read the guide before continuing.'),
+          'restore did not recover the exact source text');
+      });
+
+      test('dynamic mixed content is unitized once without rescanning its synthetic wrapper', async () => {
+        resetContentState();
+        document.body.innerHTML = `
+          <main id="dynamic-main">
+            <p id="existing-copy">Existing readable content keeps the page root stable.</p>
+          </main>
+        `;
+        state.config = {
+          showOriginal: false,
+          autoDetect: false,
+          targetLang: 'en',
+          translationScope: 'full'
+        };
+        state.scope = 'full';
+        state.isActive = true;
+        state.shouldStop = false;
+        ensureScanContext();
+
+        const originalProcessQueue = processQueue;
+        processQueue = () => Promise.resolve();
+        // Keep the queue observable and prevent this DOM behavior test from
+        // depending on a provider response.
+        state.activeTranslations = CONFIG.MAX_CONCURRENT;
+
+        try {
+          startMutationObserver();
+          const mixed = document.createElement('div');
+          mixed.id = 'dynamic-mixed';
+          mixed.innerHTML = `
+            Read <a id="dynamic-guide" href="/guide">the dynamic guide</a> before continuing.
+            <p id="dynamic-nested">The nested paragraph remains independent.</p>
+            <button id="dynamic-save">Save changes</button>
+          `;
+          document.querySelector('#dynamic-main').append(mixed);
+          const guide = document.querySelector('#dynamic-guide');
+
+          await sleep(CONFIG.MUTATION_DEBOUNCE + 120);
+
+          const wrappers = mixed.querySelectorAll('.oit-direct-text-run');
+          assert(wrappers.length === 1,
+            `dynamic insertion created ${wrappers.length} direct-text-run wrappers`);
+          assert(wrappers[0].contains(guide), 'dynamic inline link was not kept in its text run');
+          assert(!state.translationQueue.some(block => block.element === guide),
+            'synthetic wrapper mutations re-enqueued the inline link as a duplicate unit');
+          assert(state.pendingDynamicRoots.size === 0,
+            'synthetic unitization mutations were left pending for another scan');
+          assert(state.mutationTimer === null,
+            'synthetic unitization mutations scheduled a redundant observer scan');
+        } finally {
+          processQueue = originalProcessQueue;
+          state.fullReset();
+        }
+      });
+
+      test('a settled translation session still rescans a revealed navigation menu', async () => {
+        resetContentState();
+        document.body.innerHTML = `
+          <header id="observer-header">
+            <nav id="observer-nav">
+              <button id="observer-trigger" type="button" aria-expanded="false">More</button>
+              <div id="observer-menu" role="menu" hidden>
+                <a id="observer-settings" href="/settings" role="menuitem">Settings</a>
+              </div>
+            </nav>
+          </header>
+          <main><article><p id="observer-copy">Readable body content anchors the smart reading view.</p></article></main>
+        `;
+        state.config = {
+          showOriginal: false,
+          autoDetect: false,
+          targetLang: 'en',
+          translationScope: 'smart'
+        };
+        state.scope = 'smart';
+        state.isActive = true;
+        state.shouldStop = false;
+        state.bodyTranslatedCount = 1;
+        ensureScanContext();
+
+        const originalProcessQueue = processQueue;
+        processQueue = () => Promise.resolve();
+
+        try {
+          startMutationObserver();
+          assert(settleTranslationPipeline(),
+            'initial translation pipeline did not settle');
+          assert(state.isActive,
+            'settled pipeline stopped the page translation session');
+
+          // Keep the revealed menu observable in the queue without allowing the
+          // stubbed queue processor to consume it.
+          state.activeTranslations = CONFIG.MAX_CONCURRENT;
+          document.querySelector('#observer-menu').hidden = false;
+          document.querySelector('#observer-trigger').setAttribute('aria-expanded', 'true');
+
+          await sleep(CONFIG.MUTATION_DEBOUNCE + 120);
+          assert(
+            state.translationQueue.some(block => block.element.id === 'observer-settings'),
+            'revealed navigation menu was not queued after attribute mutations'
+          );
+        } finally {
+          processQueue = originalProcessQueue;
+          state.fullReset();
+        }
+      });
+
+      test('settled X sessions ignore volatile class and style mutations', () => {
+        resetContentState();
+        createFAB({ right: 20, top: '50%' });
+        document.body.insertAdjacentHTML('afterbegin', `
+          <main id="x-observer-main">
+            <article id="x-observer-post" lang="en">
+              <div id="x-observer-post-body"
+                   data-testid="tweetText"
+                   lang="en"
+                   dir="auto">
+                A completed post should not start another scan for React style changes.
+              </div>
+            </article>
+          </main>
+        `);
+        const post = document.querySelector('#x-observer-post');
+        const postBody = document.querySelector('#x-observer-post-body');
+        state.config = {
+          showOriginal: true,
+          autoDetect: false,
+          targetLang: 'zh-CN',
+          translationScope: 'smart'
+        };
+        state.scope = 'smart';
+        state.isActive = true;
+        state.shouldStop = false;
+        state.bodyTranslatedCount = 1;
+        state.completedElements.add(postBody);
+        state.lifecycle.start();
+        state.lifecycle.markActivity();
+        assert(settleTranslationPipeline(),
+          'completed X fixture did not settle initially');
+        updateFabStatus('completed');
+
+        try {
+          handleDynamicMutations([
+            {
+              type: 'attributes',
+              target: post,
+              attributeName: 'class',
+              oldValue: 'r-kzbkwu',
+              addedNodes: [],
+              removedNodes: []
+            },
+            {
+              type: 'attributes',
+              target: post,
+              attributeName: 'style',
+              oldValue: 'transform: translateY(0px);',
+              addedNodes: [],
+              removedNodes: []
+            }
+          ]);
+
+          assert(state.pendingDynamicRoots.size === 0,
+            'volatile X attributes queued redundant dynamic roots');
+          assert(state.mutationTimer === null,
+            'volatile X attributes scheduled a redundant dynamic scan');
+          assert(state.pipelineSettled,
+            'volatile X attributes reopened a settled pipeline');
+          assert(!isTranslationPipelineBusy(),
+            'volatile X attributes restarted the page loading state');
+          assert(!fab?.querySelector('.oit-fab-btn')?.classList.contains('translating'),
+            'volatile X attributes restarted the floating button spinner');
+        } finally {
+          hideFAB();
+          state.fullReset();
+        }
+      });
+
+      test('settled X sessions translate posts in opaque virtualized wrappers', async () => {
+        resetContentState();
+        hideFAB();
+        const originalSendMessage = chrome.runtime.sendMessage;
+        const waitFor = async (predicate, timeout = 2000) => {
+          const deadline = performance.now() + timeout;
+          while (performance.now() < deadline) {
+            if (predicate()) return true;
+            await sleep(20);
+          }
+          return predicate();
+        };
+
+        document.body.innerHTML = `
+          <main id="x-virtualized-main">
+            <article id="x-existing-post">
+              <div id="x-existing-body"
+                   data-testid="tweetText"
+                   lang="en"
+                   dir="auto">
+                Existing timeline content anchors the smart reading root.
+              </div>
+            </article>
+          </main>
+        `;
+        state.config = {
+          showOriginal: false,
+          autoDetect: false,
+          targetLang: 'zh-CN',
+          translationScope: 'smart'
+        };
+        state.scope = 'smart';
+        state.isActive = true;
+        state.shouldStop = false;
+        state.bodyTranslatedCount = 1;
+        state.completedElements.add(document.querySelector('#x-existing-body'));
+        state.lifecycle.start();
+        state.lifecycle.markActivity();
+        state.scanContext = pageScanner.createScanContext({
+          scope: 'smart',
+          site: 'x'
+        });
+        pageScanner.collectPageCandidates('smart', {
+          context: state.scanContext,
+          site: 'x'
+        });
+        chrome.runtime.sendMessage = message => {
+          if (message.action === 'abortRequest') {
+            return Promise.resolve({ success: true });
+          }
+          if (message.action !== 'translate') {
+            return Promise.resolve({ translations: [] });
+          }
+          return Promise.resolve({
+            translations: message.texts.map(pseudoTranslate)
+          });
+        };
+
+        try {
+          assert(settleTranslationPipeline(),
+            'completed X fixture did not settle before virtualization');
+          startMutationObserver();
+
+          const wrapper = document.createElement('x-timeline-cell');
+          wrapper.id = 'x-late-timeline-cell';
+          wrapper.innerHTML = `
+            <article id="x-late-post-one">
+              <div id="x-late-body-one"
+                   data-testid="tweetText"
+                   lang="en"
+                   dir="auto">
+                The first virtualized post appears after the initial session settled.
+              </div>
+            </article>
+            <article id="x-late-post-two">
+              <div id="x-late-body-two"
+                   data-testid="tweetText"
+                   lang="en"
+                   dir="auto">
+                The second virtualized post must translate in the same mutation batch.
+              </div>
+            </article>
+          `;
+          const wrapperIdentity = wrapper;
+          const firstArticle = wrapper.querySelector('#x-late-post-one');
+          const secondArticle = wrapper.querySelector('#x-late-post-two');
+          document.body.append(wrapper);
+
+          const translated = await waitFor(() => (
+            translationRecords.has(document.querySelector('#x-late-body-one'))
+            && translationRecords.has(document.querySelector('#x-late-body-two'))
+          ));
+          assert(translated,
+            `late virtualized X posts were not translated: `
+              + `${JSON.stringify(state.dynamicDiagnostics)}`);
+          assert(document.querySelector('#x-late-timeline-cell') === wrapperIdentity
+              && document.querySelector('#x-late-post-one') === firstArticle
+              && document.querySelector('#x-late-post-two') === secondArticle,
+          'virtualized X translation replaced timeline nodes');
+          assert(await waitFor(() => isTranslationPipelineIdle()),
+            'virtualized X translation did not return the pipeline to idle');
+          assert(settleTranslationPipeline(),
+            'virtualized X translation did not settle the existing session');
+          assert(state.isActive,
+            'virtualized X translation stopped future dynamic observation');
+        } finally {
+          chrome.runtime.sendMessage = originalSendMessage;
+          removeAllTranslations();
+          state.fullReset();
+        }
+      });
+
+      test('scroll events from class-based SPA containers trigger a rescan', async () => {
+        resetContentState();
+        document.body.innerHTML = `
+          <main><article><p>Existing content keeps the smart session active.</p></article></main>
+          <div id="virtual-scroller"
+               style="height:200px">
+            <div style="height:1200px"></div>
+          </div>
+        `;
+        state.config = {
+          showOriginal: true,
+          autoDetect: false,
+          targetLang: 'zh-CN',
+          translationScope: 'smart'
+        };
+        state.scope = 'smart';
+        state.isActive = true;
+        state.shouldStop = false;
+
+        const originalCollectViewportBlocks = collectViewportBlocks;
+        let scanCount = 0;
+        collectViewportBlocks = () => {
+          scanCount++;
+          return [];
+        };
+
+        try {
+          startScrollListener();
+          document.querySelector('#virtual-scroller').dispatchEvent(
+            new Event('scroll')
+          );
+          await sleep(CONFIG.SCROLL_DEBOUNCE + 120);
+          assert(scanCount > 0,
+            'scroll inside a class-based SPA container did not trigger a rescan');
+        } finally {
+          collectViewportBlocks = originalCollectViewportBlocks;
+          state.fullReset();
+        }
+      });
+
+      test('class and style reveal transitions still trigger dynamic scanning', () => {
+        resetContentState();
+        document.body.innerHTML = `
+          <main><p>Existing translated content keeps the SPA session active.</p></main>
+          <div id="class-menu" class="menu open">
+            <a href="/profile">Profile</a>
+          </div>
+          <div id="style-menu" style="display:block">
+            <a href="/settings">Settings</a>
+          </div>
+        `;
+        state.config = {
+          showOriginal: true,
+          autoDetect: false,
+          targetLang: 'zh-CN',
+          translationScope: 'smart'
+        };
+        state.scope = 'smart';
+        state.isActive = true;
+        state.shouldStop = false;
+        state.bodyTranslatedCount = 1;
+        state.lifecycle.start();
+        state.lifecycle.markActivity();
+        assert(settleTranslationPipeline(),
+          'reveal transition fixture did not settle initially');
+
+        try {
+          handleDynamicMutations([
+            {
+              type: 'attributes',
+              target: document.querySelector('#class-menu'),
+              attributeName: 'class',
+              oldValue: 'menu hidden'
+            },
+            {
+              type: 'attributes',
+              target: document.querySelector('#style-menu'),
+              attributeName: 'style',
+              oldValue: 'display: none;'
+            }
+          ]);
+
+          assert(state.pendingDynamicRoots.has(document.querySelector('#class-menu')),
+            'removing a hidden class did not queue the revealed menu');
+          assert(state.pendingDynamicRoots.has(document.querySelector('#style-menu')),
+            'removing display:none did not queue the revealed menu');
+          assert(state.mutationTimer !== null,
+            'reveal transitions did not schedule a dynamic scan');
+        } finally {
+          state.fullReset();
+        }
+      });
+
+      test('a dynamic root without candidates reschedules pipeline completion', async () => {
+        resetContentState();
+        document.body.innerHTML = `
+          <main id="completion-main">
+            <article><p>Existing readable content keeps the page session active.</p></article>
+          </main>
+        `;
+        state.config = {
+          showOriginal: false,
+          autoDetect: false,
+          targetLang: 'en',
+          translationScope: 'smart'
+        };
+        state.scope = 'smart';
+        state.isActive = true;
+        state.shouldStop = false;
+        state.bodyTranslatedCount = 1;
+        state.pipelineSettled = false;
+        ensureScanContext();
+
+        const noise = document.createElement('div');
+        noise.id = 'non-translatable-noise';
+        noise.textContent = '12345';
+        document.querySelector('#completion-main').appendChild(noise);
+        state.pendingDynamicRoots.add(noise);
+
+        try {
+          processDynamicRoots();
+          assert(state.pendingDynamicRoots.size === 0,
+            'dynamic root was not consumed');
+
+          await sleep(CONFIG.COMPLETION_IDLE + 120);
+          assert(state.pipelineSettled,
+            'candidate-free dynamic root did not reschedule completion');
+          assert(!isTranslationPipelineBusy(),
+            'candidate-free dynamic root left the pipeline busy forever');
+        } finally {
+          state.fullReset();
+        }
+      });
+
+      test('pending observer bookkeeping does not keep a settled session busy', () => {
+        resetContentState();
+        document.body.innerHTML = `
+          <main><article>
+            <p>Completed content remains translated while the SPA keeps mutating.</p>
+          </article></main>
+        `;
+        state.config = {
+          showOriginal: false,
+          autoDetect: false,
+          targetLang: 'en',
+          translationScope: 'smart'
+        };
+        state.scope = 'smart';
+        state.isActive = true;
+        state.shouldStop = false;
+        state.bodyTranslatedCount = 1;
+        state.pendingDynamicRoots.add(document.body);
+        state.mutationTimer = setTimeout(() => {}, 10000);
+
+        try {
+          assert(settleTranslationPipeline(),
+            'observer bookkeeping kept the translation pipeline busy');
+          assert(!isTranslationPipelineBusy(),
+            'settled translation session still reports active work');
+        } finally {
+          state.fullReset();
+        }
+      });
+
+      test('content state separates a settled session from current pipeline work', () => {
+        resetContentState();
+        document.body.innerHTML = `
+          <main><article>
+            <p id="settled-copy">Completed content remains available for SPA observation.</p>
+          </article></main>
+        `;
+        state.config = {
+          showOriginal: false,
+          autoDetect: false,
+          targetLang: 'en',
+          translationScope: 'smart'
+        };
+        state.scope = 'smart';
+        state.isActive = true;
+        state.shouldStop = false;
+        state.bodyTranslatedCount = 2;
+        state.lifecycle.start();
+        state.lifecycle.markActivity();
+
+        assert(settleTranslationPipeline(),
+          'successful content pipeline did not settle');
+        const snapshot = getTranslationStateSnapshot();
+        assert(snapshot.phase === 'completed',
+          `settled content reported phase ${snapshot.phase}`);
+        assert(snapshot.sessionActive === true,
+          'settled content stopped the SPA observation session');
+        assert(snapshot.pipelineBusy === false
+            && snapshot.isTranslating === false,
+        'settled content still reported active loading');
+
+        state.fullReset();
+      });
+
+      test('content state retains a settled failure for popup recovery', () => {
+        resetContentState();
+        document.body.innerHTML = '<main><p>12345</p></main>';
+        state.isActive = true;
+        state.shouldStop = false;
+        state.lifecycle.start();
+        state.lifecycle.markActivity();
+
+        assert(settleTranslationPipeline(),
+          'failed content pipeline did not settle');
+        const snapshot = getTranslationStateSnapshot();
+        assert(snapshot.phase === 'failed',
+          `failed content reported phase ${snapshot.phase}`);
+        assert(snapshot.sessionActive === true,
+          'failed content stopped dynamic observation');
+        assert(snapshot.pipelineBusy === false
+            && snapshot.isTranslating === false,
+        'failed content left popup loading active');
+        assert(snapshot.lastError === 'No translatable page content was found',
+          'failed content did not retain its diagnostic reason');
+
+        state.fullReset();
+      });
+
+      test('content state exposes adaptive UI root diagnostics', () => {
+        resetContentState();
+        state.scanContext = pageScanner.createScanContext({
+          scope: 'smart',
+          site: 'x'
+        });
+        state.scanContext.stats.adaptiveUiRootsFound = 3;
+        state.scanContext.stats.adaptiveUiRootsAccepted = 2;
+        state.scanContext.stats.adaptiveUiRootsRejected = 1;
+        state.scanContext.stats.adaptiveUiRootSources = {
+          'generic': 1,
+          'x:sidenav-cluster': 2
+        };
+        state.scanContext.stats.adaptiveUiRootSamples = [{
+          source: 'x:sidenav-cluster',
+          accepted: true,
+          reason: null,
+          tag: 'DIV',
+          id: null
+        }];
+
+        const diagnostics = getTranslationStateSnapshot().diagnostics;
+        assert(diagnostics.adaptiveUiRootsFound === 3,
+          'content diagnostics omitted adaptive UI roots found');
+        assert(diagnostics.adaptiveUiRootsAccepted === 2,
+          'content diagnostics omitted accepted adaptive UI roots');
+        assert(diagnostics.adaptiveUiRootsRejected === 1,
+          'content diagnostics omitted rejected adaptive UI roots');
+        assert(
+          diagnostics.adaptiveUiRootSources['x:sidenav-cluster'] === 2,
+          'content diagnostics omitted adaptive UI root sources'
+        );
+        assert(
+          diagnostics.adaptiveUiRootSamples[0]?.source === 'x:sidenav-cluster',
+          'content diagnostics omitted adaptive UI root samples'
+        );
+
+        state.fullReset();
+      });
+
+      test('dynamic mutations share one bounded debounce window', () => {
+        resetContentState();
+        state.config = {
+          showOriginal: false,
+          autoDetect: false,
+          targetLang: 'en',
+          translationScope: 'smart'
+        };
+        state.scope = 'smart';
+        state.isActive = true;
+        state.shouldStop = false;
+        state.mutationTimer = setTimeout(() => {}, 10000);
+        const originalTimer = state.mutationTimer;
+
+        try {
+          const inserted = document.createElement('div');
+          inserted.textContent = 'A newly inserted SPA node';
+          handleDynamicMutations([{
+            type: 'childList',
+            target: document.body,
+            addedNodes: [inserted]
+          }]);
+
+          assert(state.pendingDynamicRoots.has(inserted),
+            'dynamic mutation was not recorded');
+          assert(state.mutationTimer === originalTimer,
+            'continuous mutations postponed the pending dynamic scan indefinitely');
+        } finally {
+          state.fullReset();
+        }
+      });
+
+      test('provider failure clears transient state and settles the pipeline', async () => {
+        resetContentState();
+        const originalSendMessage = chrome.runtime.sendMessage;
+        document.title = 'Provider failure regression';
+        document.body.innerHTML = `
+          <main><article>
+            <p id="failed-host">This paragraph exercises the provider failure path.</p>
+          </article></main>
+        `;
+        const host = document.querySelector('#failed-host');
+        state.config = {
+          showOriginal: true,
+          autoDetect: false,
+          targetLang: 'en',
+          maxConcurrent: 1
+        };
+        state.isActive = true;
+        state.shouldStop = false;
+        chrome.runtime.sendMessage = async message => {
+          if (message.action === 'translate') {
+            return { error: 'provider unavailable' };
+          }
+          return { success: true };
+        };
+
+        try {
+          const block = prepareTranslationBlock(host, {
+            role: 'paragraph',
+            container: host.closest('article'),
+            headingTrail: [],
+            order: 0
+          });
+          assert(addToQueue(block), 'provider failure block was not enqueued');
+          await processQueue();
+
+          assert(state.translationQueue.length === 0,
+            'provider failure left work in the translation queue');
+          assert(state.pendingElements.size === 0,
+            'provider failure left pending elements behind');
+          assert(state.translatingElements.size === 0,
+            'provider failure left elements marked as translating');
+          assert(!host.classList.contains('oit-pending')
+              && !host.classList.contains('oit-translating-text'),
+          'provider failure left transient classes on the source element');
+          assert(state.failedRequestCount === 1,
+            'provider failure was not recorded');
+          assert(settleTranslationPipeline(),
+            'provider failure did not settle the translation pipeline');
+          assert(!isTranslationPipelineBusy(),
+            'provider failure left the floating button pipeline busy');
+        } finally {
+          chrome.runtime.sendMessage = originalSendMessage;
+          state.fullReset();
+        }
+      });
+
+      test('failed units stay in bounded cooldown across repeated scanner passes', async () => {
+        resetContentState();
+        const originalSendMessage = chrome.runtime.sendMessage;
+        let providerCalls = 0;
+        document.title = 'Repeated provider failure regression';
+        document.body.innerHTML = `
+          <main><article>
+            <p id="cooldown-host">
+              This paragraph fails once and must not be requeued on every periodic scan.
+            </p>
+          </article></main>
+        `;
+        const host = document.querySelector('#cooldown-host');
+        state.config = {
+          showOriginal: true,
+          autoDetect: false,
+          targetLang: 'en',
+          maxConcurrent: 1,
+          translationScope: 'smart'
+        };
+        state.scope = 'smart';
+        state.isActive = true;
+        state.shouldStop = false;
+        chrome.runtime.sendMessage = async message => {
+          if (message.action === 'translate') {
+            providerCalls++;
+            return { error: 'provider unavailable' };
+          }
+          if (message.action === 'abortRequest') return { success: true };
+          return { success: true };
+        };
+
+        try {
+          const block = prepareTranslationBlock(host, {
+            role: 'paragraph',
+            container: host.closest('article'),
+            headingTrail: [],
+            order: 0
+          });
+          assert(addToQueue(block), 'cooldown block was not enqueued');
+          await processQueue();
+          assert(providerCalls === 1, `expected one provider call, got ${providerCalls}`);
+
+          for (let pass = 0; pass < 5; pass++) {
+            scanViewportAndQueue();
+            await sleep(5);
+          }
+
+          assert(providerCalls === 1,
+            `failed content was retried by ${providerCalls - 1} scanner passes`);
+          assert(state.retryPolicy.getStatus(
+            host,
+            getBlockRetryFingerprint(block)
+          ).allowed === false,
+            'failed content did not retain a cooling-down decision');
+          assert(state.translationQueue.length === 0,
+            'failed content left work in the translation queue');
+          assert(state.pendingElements.size === 0,
+            'failed content left pending elements behind');
+          assert(state.translatingElements.size === 0,
+            'failed content left translating elements behind');
+          assert(state.inflightRequests.size === 0,
+            'failed content left an in-flight request behind');
+          assert(state.translationTasks.size === 0,
+            'failed content left an active translation task behind');
+          assert(settleTranslationPipeline(),
+            'failed repeated scans did not settle the translation pipeline');
+          assert(state.isActive,
+            'settling a failed page stopped the observation session');
+          assert(!isTranslationPipelineBusy(),
+            'failed repeated scans left the floating button spinning');
+        } finally {
+          chrome.runtime.sendMessage = originalSendMessage;
+          state.fullReset();
+        }
+      });
+
+      test('visible navigation labels outrank visible body prose without starving the reader', () => {
+        resetContentState();
+        document.body.innerHTML = `
+          <header><nav id="priority-nav"><a id="priority-link" href="/home">Home</a></nav></header>
+          <main><p id="priority-copy">Visible body prose remains eligible for translation.</p></main>
+        `;
+        const navigation = prepareTranslationBlock(
+          document.querySelector('#priority-link'),
+          { siteRole: 'navigation-label', role: 'control' }
+        );
+        const body = prepareTranslationBlock(
+          document.querySelector('#priority-copy'),
+          { role: 'paragraph' }
+        );
+
+        assert(
+          computeBlockPriority(navigation) > computeBlockPriority(body),
+          'visible navigation label did not outrank visible body prose'
+        );
+        assert(Number.isFinite(computeBlockPriority(body)),
+          'body prose did not retain a finite background priority');
+      });
+
+      test('the first viewport scan cannot let a large reading root evict adaptive navigation', () => {
+        resetContentState();
+        const paragraphCount = CONFIG.MAX_VIEWPORT_SCAN + 25;
+        const paragraphs = Array.from({ length: paragraphCount }, (_, index) => (
+          `<p id="budget-copy-${index}"
+              style="position:absolute;top:20px;left:20px;width:560px;height:16px">
+             Visible reading paragraph number ${index} keeps the content root busy.
+           </p>`
+        )).join('');
+        document.body.innerHTML = `
+          <main id="budget-main" style="position:relative;display:block;width:640px;height:320px">
+            ${paragraphs}
+          </main>
+          <nav id="budget-nav" style="position:absolute;top:350px;left:20px;width:220px">
+            <a id="budget-nav-home" href="/home"
+               style="display:block;width:200px;height:36px">Home</a>
+          </nav>
+        `;
+        state.config = {
+          showOriginal: true,
+          autoDetect: false,
+          targetLang: 'zh-CN',
+          translationScope: 'smart'
+        };
+        state.scope = 'smart';
+        state.scanContext = pageScanner.createScanContext({
+          scope: 'smart',
+          site: 'generic'
+        });
+
+        const candidates = pageScanner.collectPageCandidates('smart', {
+          context: state.scanContext,
+          site: 'generic'
+        });
+        assert(candidates.length > CONFIG.MAX_VIEWPORT_SCAN,
+          `test setup produced only ${candidates.length} candidates`);
+        assert(candidates.some(candidate => candidate.element.id === 'budget-nav-home'),
+          'scanner did not discover the adaptive navigation label');
+
+        const blocks = collectViewportBlocks();
+        assert(blocks.some(block => block.element.id === 'budget-nav-home'),
+          'first viewport scan spent its budget on body prose before adaptive navigation');
+        assert(blocks.some(block => block.element.id === 'budget-copy-0'),
+          'navigation priority removed all reading content from the viewport budget');
+      });
+
+      test('an authenticated X-like timeline cannot starve SideNav or AppTabBar labels', () => {
+        resetContentState();
+        const postCount = CONFIG.MAX_VIEWPORT_SCAN + 25;
+        const posts = Array.from({ length: postCount }, (_, index) => (
+          `<div id="x-budget-post-${index}"
+                data-testid="tweetText"
+                lang="en"
+                dir="auto"
+                style="position:absolute;top:20px;left:300px;width:520px;height:18px">
+             Timeline post body number ${index} remains part of the reading view.
+           </div>`
+        )).join('');
+        document.body.innerHTML = `
+          <div style="display:flex;width:1100px;height:700px">
+            <div data-testid="SideNav"
+                 style="display:block;width:230px;height:260px">
+              <a id="x-budget-home-control"
+                 data-testid="SideNav_Home_Link"
+                 href="/home"
+                 style="display:flex;width:210px;height:38px">
+                <span id="x-budget-home-label">Home</span>
+              </a>
+              <a id="x-budget-profile-control"
+                 data-testid="SideNav_Profile_Link"
+                 href="/alice"
+                 style="display:flex;width:210px;height:38px">
+                <span id="x-budget-profile-label">Profile</span>
+              </a>
+              <button id="x-budget-compose-control"
+                      data-testid="SideNav_NewTweet_Button"
+                      type="button"
+                      style="display:flex;width:210px;height:42px">
+                <span id="x-budget-compose-label">Post</span>
+              </button>
+            </div>
+            <main id="x-budget-main"
+                  style="position:relative;display:block;width:650px;height:500px">
+              <article>${posts}</article>
+            </main>
+          </div>
+          <div data-testid="AppTabBar"
+               style="display:flex;width:600px;height:48px">
+            <a id="x-budget-app-home-control"
+               data-testid="AppTabBar_Home_Link"
+               href="/home"
+               style="display:block;width:180px;height:40px">
+              <span id="x-budget-app-home-label">Home</span>
+            </a>
+            <a id="x-budget-app-explore-control"
+               data-testid="AppTabBar_Explore_Link"
+               href="/explore"
+               style="display:block;width:180px;height:40px">
+              <span id="x-budget-app-explore-label">Explore</span>
+            </a>
+            <a id="x-budget-app-notifications-control"
+               data-testid="AppTabBar_Notifications_Link"
+               href="/notifications"
+               style="display:block;width:180px;height:40px">
+              <span id="x-budget-app-notifications-label">Notifications</span>
+            </a>
+          </div>
+        `;
+        state.config = {
+          showOriginal: true,
+          autoDetect: false,
+          targetLang: 'zh-CN',
+          translationScope: 'smart'
+        };
+        state.scope = 'smart';
+        state.scanContext = pageScanner.createScanContext({
+          scope: 'smart',
+          site: 'x'
+        });
+
+        const blocks = collectViewportBlocks();
+        const ids = new Set(blocks.map(block => block.element.id));
+        for (const expected of [
+          'x-budget-home-label',
+          'x-budget-profile-label',
+          'x-budget-compose-label',
+          'x-budget-app-home-label',
+          'x-budget-app-explore-label',
+          'x-budget-app-notifications-label'
+        ]) {
+          assert(ids.has(expected),
+            `first X viewport scan omitted authenticated navigation ${expected}`);
+        }
+        assert(ids.has('x-budget-post-0'),
+          'X navigation priority starved the visible timeline');
+      });
+
+      test('bilingual content path releases a fixed title branch and restores it exactly', () => {
+        document.body.innerHTML = '<a id="card" href="/case" style="display:block"><div id="title" style="height:24px;min-height:24px;line-height:24px;max-height:24px"><span id="host">Customer story</span></div></a>';
+        const host = document.querySelector('#host');
+        const title = document.querySelector('#title');
+        const originalStyle = title.getAttribute('style');
+
+        state.config = {
+          showOriginal: true,
+          autoDetect: false,
+          targetLang: 'en'
+        };
+        const block = prepareTranslationBlock(host);
+        assert(applyTranslation(block, pseudoTranslate(block.text)),
+          'bilingual content translation was not applied');
+
+        assert(translationRecords.get(host)?.kind === 'bilingual',
+          'bilingual content path selected the wrong translation record');
+        assert(title.style.height === 'auto', 'fixed title height was not released');
+        assert(title.style.minHeight === '24px', 'original title minimum height was not retained');
+        assert(title.style.maxHeight === 'none', 'title maximum height still clips the translation');
+        assert(host.querySelector(':scope > .oit-translation'),
+          'bilingual translation was not appended through the content path');
+
+        removeAllTranslations();
+        assert(title.getAttribute('style') === originalStyle,
+          'bilingual content restore changed the title style');
+        assert(host.textContent === 'Customer story',
+          'bilingual content restore changed the source text');
+      });
+
+      test('document title translation restores only the extension-applied title', async () => {
+        resetContentState();
+        const sourceTitle = 'Source page title';
+        const originalSendMessage = chrome.runtime.sendMessage;
+        let titleRequest = null;
+        document.title = sourceTitle;
+        state.config = {
+          showOriginal: true,
+          autoDetect: false,
+          targetLang: 'en'
+        };
+        state.isActive = true;
+        state.shouldStop = false;
+        chrome.runtime.sendMessage = async message => {
+          if (message.action === 'translate') {
+            titleRequest = message;
+            return { translations: [pseudoTranslate(message.texts[0])] };
+          }
+          return { translations: [] };
+        };
+
+        try {
+          await translateDocumentTitle();
+          assert(titleRequest?.context?.scene === 'title',
+            'document title request did not use the title scene');
+          assert(!('title' in titleRequest.context),
+            'document title request included unrelated page title context');
+          const translatedTitle = document.title;
+          assert(translatedTitle !== sourceTitle, 'document title was not translated');
+          assert(restoreDocumentTitle(), 'extension-applied title was not restored');
+          assert(document.title === sourceTitle, 'restore did not return the exact source title');
+        } finally {
+          chrome.runtime.sendMessage = originalSendMessage;
+          state.isActive = false;
+          state.shouldStop = false;
+        }
+      });
+
+      test('page translation requests carry bounded page context', async () => {
+        resetContentState();
+        const originalSendMessage = chrome.runtime.sendMessage;
+        let pageRequest = null;
+        document.title = 'Architecture guide';
+        document.body.innerHTML = `
+          <main><article>
+            <h2>Translation architecture</h2>
+            <p id="host">The translation kernel should preserve dependencies between paragraphs.</p>
+          </article></main>
+        `;
+        const host = document.querySelector('#host');
+        state.config = {
+          showOriginal: true,
+          autoDetect: false,
+          targetLang: 'en'
+        };
+        state.isActive = true;
+        state.shouldStop = false;
+        chrome.runtime.sendMessage = async message => {
+          if (message.action === 'translate') {
+            pageRequest = message;
+            return { translations: [pseudoTranslate(message.texts[0])] };
+          }
+          return { translations: [] };
+        };
+
+        try {
+          const block = prepareTranslationBlock(host, {
+            role: 'paragraph',
+            container: host.closest('article'),
+            headingTrail: ['Translation architecture']
+          });
+          assert(block, 'page translation block was not prepared');
+          await translateBatch([block]);
+
+          assert(pageRequest?.context?.scene === 'page',
+            'page translation request did not use the page scene');
+          assert(pageRequest.context.title === 'Architecture guide',
+            'page translation request omitted the document title');
+          assert(pageRequest.context.surroundingText.includes('Translation architecture'),
+            'page translation request omitted heading context');
+          assert(pageRequest.context.surroundingText.length <= 900,
+            'page translation context exceeded its prompt budget');
+        } finally {
+          chrome.runtime.sendMessage = originalSendMessage;
+          removeAllTranslations();
+          state.isActive = false;
+          state.shouldStop = false;
+          resetContentState();
+        }
+      });
+
+      test('queued pending blocks are translated, drained, and marked complete', async () => {
+        resetContentState();
+        const originalSendMessage = chrome.runtime.sendMessage;
+        const requests = [];
+        document.title = 'Queued content regression';
+        document.body.innerHTML = `
+          <main><article>
+            <h2 id="heading">Queued translation heading</h2>
+            <p id="host">Queued content must leave the pending state and render a translation.</p>
+          </article></main>
+        `;
+        const host = document.querySelector('#host');
+        state.config = {
+          showOriginal: true,
+          autoDetect: false,
+          targetLang: 'en',
+          maxConcurrent: 2
+        };
+        state.isActive = true;
+        state.shouldStop = false;
+        chrome.runtime.sendMessage = async message => {
+          if (message.action === 'translate') {
+            requests.push(message);
+            return {
+              translations: message.texts.map(pseudoTranslate)
+            };
+          }
+          return { success: true };
+        };
+
+        try {
+          const block = prepareTranslationBlock(host, {
+            role: 'paragraph',
+            container: host.closest('article'),
+            headingTrail: ['Queued translation heading'],
+            order: 0
+          });
+          assert(block, 'queued regression block was not prepared');
+          assert(addToQueue(block), 'queued regression block was not enqueued');
+          assert(host.classList.contains('oit-pending'),
+            'enqueued block did not receive its pending marker');
+
+          await processQueue();
+
+          assert(requests.length === 1,
+            `queued block emitted ${requests.length} provider requests instead of one`);
+          assert(requests[0].texts[0].includes('Queued content must leave'),
+            'queued provider request did not contain the body text');
+          assert(host.querySelector(':scope > .oit-translation'),
+            'queued body translation was not rendered');
+          assert(!host.classList.contains('oit-pending')
+            && !host.classList.contains('oit-translating-text'),
+          'queued body retained a transient state after translation');
+          assert(state.translationQueue.length === 0,
+            'queued body remained in the translation queue');
+          assert(state.completedElements.has(host),
+            'queued body was not marked complete');
+          assert(settleTranslationPipeline(),
+            'idle translation pipeline did not settle');
+          assert(state.isActive,
+            'settled translation pipeline stopped observing future page content');
+          assert(!isTranslationPipelineBusy(),
+            'settled translation pipeline remained busy');
+        } finally {
+          chrome.runtime.sendMessage = originalSendMessage;
+          removeAllTranslations();
+          state.fullReset();
+        }
+      });
+
+      test('site adapter identifies X fallback post bodies as Twitter content', () => {
+        resetContentState();
+        document.body.innerHTML = `
+          <main>
+            <article>
+              <div class="whitespace-pre-wrap" lang="en" dir="auto" id="x-fallback-body">
+                X fallback post bodies must use the Twitter translation strategy.
+              </div>
+            </article>
+          </main>
+        `;
+        state.config = {
+          showOriginal: true,
+          autoDetect: false,
+          targetLang: 'en',
+          translationScope: 'smart'
+        };
+        state.scanContext = pageScanner.createScanContext({
+          scope: 'smart',
+          site: 'x'
+        });
+        const candidates = pageScanner.collectPageCandidates('smart', {
+          context: state.scanContext,
+          site: 'x'
+        });
+        const candidate = candidates.find(item => item.element.id === 'x-fallback-body');
+        assert(candidate, 'X fallback post body was not discovered');
+        const block = createBlockFromCandidate(candidate);
+        assert(block?.site === 'x' && block?.siteRole === 'post-body',
+          'X fallback post body did not retain adapter semantics');
+        assert(block?.isTwitter, 'X fallback post body did not use Twitter semantics');
+      });
+
+      test('individually observed rail anchors translate and settle end to end', async () => {
+        resetContentState();
+        const originalSendMessage = chrome.runtime.sendMessage;
+        const requests = [];
+        const waitFor = async (predicate, timeout = 2000) => {
+          const deadline = performance.now() + timeout;
+          while (performance.now() < deadline) {
+            if (predicate()) return true;
+            await sleep(20);
+          }
+          return predicate();
+        };
+        const isVisibleWithin = element => {
+          const rect = element?.getBoundingClientRect();
+          if (!rect || rect.width <= 0 || rect.height <= 0) return false;
+          let visibleRect = {
+            top: rect.top,
+            right: rect.right,
+            bottom: rect.bottom,
+            left: rect.left
+          };
+          let current = element.parentElement;
+          while (current && current !== document.body) {
+            const style = getComputedStyle(current);
+            if (['hidden', 'clip'].includes(style.overflow)
+                || ['hidden', 'clip'].includes(style.overflowY)) {
+              const clipRect = current.getBoundingClientRect();
+              visibleRect = {
+                top: Math.max(visibleRect.top, clipRect.top),
+                right: Math.min(visibleRect.right, clipRect.right),
+                bottom: Math.min(visibleRect.bottom, clipRect.bottom),
+                left: Math.max(visibleRect.left, clipRect.left)
+              };
+            }
+            current = current.parentElement;
+          }
+          return visibleRect.right > visibleRect.left
+            && visibleRect.bottom > visibleRect.top;
+        };
+
+        document.title = 'Incremental navigation regression';
+        document.body.innerHTML = `
+          <div id="incremental-shell"
+               style="display:flex;gap:20px;width:900px;height:620px">
+            <main id="incremental-main"
+                  style="display:block;width:620px;min-height:180px">
+              <article>
+                <div id="incremental-post"
+                     lang="en"
+                     dir="auto"
+                     style="display:block;width:600px;min-height:80px">
+                  Existing timeline content establishes the smart reading root.
+                </div>
+              </article>
+            </main>
+            <div id="incremental-rail"
+                 style="display:block;width:230px;height:180px;overflow:hidden"></div>
+          </div>
+        `;
+        const rail = document.querySelector('#incremental-rail');
+        const definitions = [
+          ['incremental-profile', '/alice', 'Profile'],
+          ['incremental-settings', '/settings', 'Settings'],
+          ['incremental-messages', '/messages', 'Messages']
+        ];
+
+        state.config = {
+          showOriginal: true,
+          autoDetect: false,
+          targetLang: 'zh-CN',
+          maxConcurrent: 4,
+          translationScope: 'smart'
+        };
+        state.scope = 'smart';
+        state.isActive = true;
+        state.shouldStop = false;
+        state.lifecycle.start();
+        state.scanContext = pageScanner.createScanContext({
+          scope: 'smart',
+          site: 'generic'
+        });
+        chrome.runtime.sendMessage = async message => {
+          if (message.action === 'translate') {
+            requests.push(message);
+            return { translations: message.texts.map(pseudoTranslate) };
+          }
+          if (message.action === 'abortRequest') return { success: true };
+          return { translations: [] };
+        };
+
+        try {
+          pageScanner.collectPageCandidates('smart', {
+            context: state.scanContext,
+            site: 'generic'
+          });
+
+          const controls = [];
+          const clicks = [];
+          for (const [id, href, label] of definitions) {
+            const control = document.createElement('a');
+            control.id = `${id}-control`;
+            control.href = href;
+            control.setAttribute(
+              'style',
+              'display:flex;width:210px;height:38px;max-height:38px;'
+                + 'overflow:hidden;-webkit-line-clamp:1'
+            );
+            control.innerHTML = `
+              <span id="${id}-label"
+                    style="display:-webkit-box;overflow:hidden;height:24px;max-height:24px;-webkit-line-clamp:1;-webkit-box-orient:vertical">${label}</span>
+            `;
+            let clickCount = 0;
+            control.addEventListener('click', event => {
+              event.preventDefault();
+              clickCount++;
+            });
+            rail.append(control);
+            state.pendingDynamicRoots.add(control);
+            controls.push(control);
+            clicks.push(() => clickCount);
+          }
+
+          processDynamicRoots();
+
+          assert(state.dynamicDiagnostics.candidates >= definitions.length,
+            `dynamic content path discovered ${state.dynamicDiagnostics.candidates} `
+              + `candidates for ${definitions.length} navigation labels`);
+          assert(state.dynamicDiagnostics.blocks >= definitions.length,
+            `dynamic content path prepared ${state.dynamicDiagnostics.blocks} `
+              + `blocks for ${definitions.length} navigation labels`);
+
+          const translated = await waitFor(() => definitions.every(([id]) => (
+            translationRecords.has(document.querySelector(`#${id}-label`))
+          )));
+          assert(translated, 'individually observed navigation labels were not translated');
+          assert(requests.length > 0, 'dynamic navigation labels never reached the provider');
+
+          const requestedText = requests.flatMap(request => request.texts).join(' ');
+          for (const [, , label] of definitions) {
+            assert(requestedText.includes(label),
+              `provider request omitted dynamic navigation label ${label}`);
+          }
+
+          definitions.forEach(([id], index) => {
+            const label = document.querySelector(`#${id}-label`);
+            const translation = label.querySelector(':scope > .oit-translation');
+            assert(translation, `dynamic navigation translation was not rendered for ${id}`);
+            assert(isVisibleWithin(label) && isVisibleWithin(translation),
+              `dynamic navigation translation is clipped for ${id}`);
+            assert(document.querySelector(`#${id}-control`) === controls[index],
+              `dynamic navigation control identity changed for ${id}`);
+            controls[index].click();
+            assert(clicks[index]() === 1,
+              `dynamic navigation click listener was lost for ${id}`);
+          });
+
+          const idle = await waitFor(() => isTranslationPipelineIdle());
+          assert(idle, 'dynamic navigation translation pipeline did not become idle');
+          assert(settleTranslationPipeline(),
+            'dynamic navigation translation session did not settle');
+          const snapshot = getTranslationStateSnapshot();
+          assert(snapshot.sessionActive === true,
+            'dynamic navigation completion stopped the page session');
+          assert(snapshot.pipelineBusy === false,
+            'dynamic navigation completion left the floating button busy');
+          assert(state.translationQueue.length === 0
+              && state.inflightRequests.size === 0
+              && state.translationTasks.size === 0,
+          'dynamic navigation completion left work in queue or transport state');
+        } finally {
+          chrome.runtime.sendMessage = originalSendMessage;
+          removeAllTranslations();
+          state.fullReset();
+        }
+      });
+
+      test('semantic navigation uses its reserved lane while feed requests are in flight', async () => {
+        resetContentState();
+        hideFAB();
+        const originalSendMessage = chrome.runtime.sendMessage;
+        const requests = [];
+        const pendingFeedRequests = [];
+        const pendingNavigationRequests = [];
+        let releaseFeedRequests = false;
+        let releaseNavigationRequests = false;
+        const waitFor = async (predicate, timeout = 2500) => {
+          const deadline = performance.now() + timeout;
+          while (performance.now() < deadline) {
+            if (predicate()) return true;
+            await sleep(20);
+          }
+          return predicate();
+        };
+        const isFeedRequest = message => message.texts.some(text =>
+          text.includes('Feed request')
+        );
+        const isNavigationRequest = message => message.texts.some(text =>
+          text.includes('Home')
+        );
+        const responseFor = message => ({
+          translations: message.texts.map(pseudoTranslate)
+        });
+        const isVisibleWithin = element => {
+          const rect = element?.getBoundingClientRect();
+          if (!rect || rect.width <= 0 || rect.height <= 0) return false;
+          let visibleRect = {
+            top: rect.top,
+            right: rect.right,
+            bottom: rect.bottom,
+            left: rect.left
+          };
+          let current = element.parentElement;
+          while (current && current !== document.body) {
+            const style = getComputedStyle(current);
+            if (['hidden', 'clip'].includes(style.overflow)
+                || ['hidden', 'clip'].includes(style.overflowY)) {
+              const clipRect = current.getBoundingClientRect();
+              visibleRect = {
+                top: Math.max(visibleRect.top, clipRect.top),
+                right: Math.min(visibleRect.right, clipRect.right),
+                bottom: Math.min(visibleRect.bottom, clipRect.bottom),
+                left: Math.max(visibleRect.left, clipRect.left)
+              };
+            }
+            current = current.parentElement;
+          }
+          return visibleRect.right > visibleRect.left
+            && visibleRect.bottom > visibleRect.top;
+        };
+
+        document.title = 'Navigation reservation regression';
+        document.body.innerHTML = `
+          <div id="reservation-shell"
+               style="display:flex;gap:20px;width:1000px;height:700px">
+            <main id="reservation-main"
+                  style="display:block;width:700px;height:680px">
+              <article id="reservation-feed-a">
+                <p>Feed request A keeps a body translation slot occupied.</p>
+              </article>
+              <article id="reservation-feed-b">
+                <p>Feed request B keeps another body translation slot occupied.</p>
+              </article>
+              <article id="reservation-feed-c">
+                <p>Feed request C waits behind the bounded body lane.</p>
+              </article>
+            </main>
+            <div id="reservation-rail"
+                 style="display:block;width:260px;height:300px"></div>
+          </div>
+        `;
+
+        state.config = {
+          showOriginal: true,
+          autoDetect: false,
+          targetLang: 'zh-CN',
+          maxConcurrent: 4,
+          translationScope: 'smart'
+        };
+        state.scope = 'smart';
+        state.isActive = true;
+        state.shouldStop = false;
+        state.lifecycle.start();
+        ensureScanContext();
+        startMutationObserver();
+        createFAB({ right: 20, top: 20 });
+        setFabToTranslating();
+
+        chrome.runtime.sendMessage = message => {
+          if (message.action === 'abortRequest') {
+            return Promise.resolve({ success: true });
+          }
+          if (message.action !== 'translate') {
+            return Promise.resolve({ translations: [] });
+          }
+
+          requests.push(message);
+          if (!isFeedRequest(message)) {
+            if (isNavigationRequest(message) && !releaseNavigationRequests) {
+              return new Promise(resolve => {
+                pendingNavigationRequests.push({ message, resolve });
+              });
+            }
+            return Promise.resolve(responseFor(message));
+          }
+          if (releaseFeedRequests) {
+            return Promise.resolve(responseFor(message));
+          }
+          return new Promise(resolve => {
+            pendingFeedRequests.push({ message, resolve });
+          });
+        };
+
+        let queueTask = null;
+        try {
+          const feedBlocks = ['a', 'b', 'c'].map((suffix, index) => {
+            const container = document.querySelector(`#reservation-feed-${suffix}`);
+            return prepareTranslationBlock(container.querySelector('p'), {
+              role: 'paragraph',
+              container,
+              headingTrail: [],
+              order: index
+            });
+          });
+          feedBlocks.forEach(block => addToQueue(block));
+          queueTask = processQueue();
+
+          assert(await waitFor(() => pendingFeedRequests.length === 2),
+            'body lane did not start exactly two delayed feed requests');
+          const requestedFeedTexts = () => new Set(
+            requests
+              .filter(isFeedRequest)
+              .flatMap(message => message.texts)
+              .filter(text => text.includes('Feed request'))
+          );
+          assert(requestedFeedTexts().size === 2,
+            `body lane did not hold exactly two feed texts: `
+              + JSON.stringify(Array.from(requestedFeedTexts())));
+          assert(state.translationQueue.length === 1,
+            `expected one feed text to remain queued, got ${state.translationQueue.length}`);
+          let schedulerState = state.requestScheduler.snapshot();
+          assert(schedulerState.bodyLimit === 2,
+            `expected a body limit of 2, got ${schedulerState.bodyLimit}`);
+          assert(schedulerState.supplementalReserve === 1,
+            `expected one reserved supplemental slot, got `
+              + `${schedulerState.supplementalReserve}`);
+          assert(schedulerState.active.body === 2
+              && schedulerState.active.adaptive === 0
+              && schedulerState.active.supplemental === 0
+              && schedulerState.active.total === 2,
+          `unexpected feed lane state: ${JSON.stringify(schedulerState.active)}`);
+
+          const rail = document.querySelector('#reservation-rail');
+          rail.innerHTML = `
+            <nav id="reservation-navigation"
+                 aria-label="Primary"
+                 style="display:block;width:240px;height:220px">
+              <a id="reservation-home"
+                 href="/home"
+                 style="display:flex;width:220px;height:42px;max-height:42px;
+                        overflow:hidden;-webkit-line-clamp:1">
+                <span id="reservation-home-label"
+                      style="display:-webkit-box;height:24px;max-height:24px;
+                             overflow:hidden;-webkit-line-clamp:1;
+                             -webkit-box-orient:vertical">Home</span>
+              </a>
+            </nav>
+          `;
+          const home = document.querySelector('#reservation-home');
+          const homeLabel = document.querySelector('#reservation-home-label');
+          const homeHref = home.getAttribute('href');
+          let homeClicks = 0;
+          home.addEventListener('click', event => {
+            event.preventDefault();
+            homeClicks++;
+          });
+
+          const navigationStarted = await waitFor(() => requests.some(message =>
+            message.texts.some(text => text.includes('Home'))
+          ));
+          assert(navigationStarted,
+            'dynamic navigation did not start while feed requests were in flight; '
+              + `requests=${JSON.stringify(requests.map(request => request.texts))}; `
+              + `queue=${JSON.stringify(state.translationQueue.snapshot?.()
+                || state.translationQueue.length)}; `
+              + `dynamic=${JSON.stringify(state.dynamicDiagnostics)}; `
+              + `scanContext=${JSON.stringify({
+                site: state.scanContext?.site,
+                contentRootId: state.contentRoot?.id,
+                pendingRoots: state.pendingDynamicRoots.size
+              })}`);
+          schedulerState = state.requestScheduler.snapshot();
+          assert(schedulerState.active.body === 2
+              && schedulerState.active.adaptive === 1
+              && schedulerState.active.supplemental === 0
+              && schedulerState.active.total === 3,
+          `navigation did not use the reserved adaptive lane: `
+            + JSON.stringify(schedulerState.active));
+          assert(requestedFeedTexts().size === 2,
+            'the remaining feed request consumed the adaptive reserve: '
+            + JSON.stringify({
+              requests: requests.map(request => request.texts),
+              active: schedulerState.active,
+              pendingFeedRequests: pendingFeedRequests.length
+            }));
+
+          releaseNavigationRequests = true;
+          for (const request of pendingNavigationRequests.splice(0)) {
+            request.resolve(responseFor(request.message));
+          }
+          assert(await waitFor(() => translationRecords.has(homeLabel)),
+            'dynamic navigation label did not render its translation');
+          const translation = homeLabel.querySelector(':scope > .oit-translation');
+          assert(translation, 'dynamic navigation translation is missing');
+          assert(isVisibleWithin(homeLabel) && isVisibleWithin(translation),
+            'dynamic navigation translation is geometrically clipped');
+          assert(document.querySelector('#reservation-home') === home,
+            'translation replaced the original navigation anchor');
+          assert(home.getAttribute('href') === homeHref,
+            'translation changed the original navigation href');
+          home.click();
+          assert(homeClicks === 1,
+            'translation removed the original navigation click listener');
+          assert(home.style.height === 'auto'
+              && home.style.maxHeight === 'none'
+              && home.style.webkitLineClamp === 'none',
+          'fixed navigation constraints still clip the bilingual label');
+
+          releaseFeedRequests = true;
+          for (const request of pendingFeedRequests.splice(0)) {
+            request.resolve(responseFor(request.message));
+          }
+          await queueTask;
+          assert(await waitFor(() => isTranslationPipelineIdle()),
+            'translation pipeline did not drain after feed requests completed');
+          assert(settleTranslationPipeline(),
+            'completed mixed-lane translation did not settle');
+
+          schedulerState = state.requestScheduler.snapshot();
+          assert(state.translationQueue.length === 0
+              && state.inflightRequests.size === 0
+              && state.translationTasks.size === 0
+              && state.pendingElements.size === 0,
+          'mixed-lane completion left queue or transport state behind');
+          assert(schedulerState.active.total === 0
+              && schedulerState.active.body === 0
+              && schedulerState.active.adaptive === 0
+              && schedulerState.active.supplemental === 0,
+          `mixed-lane completion leaked scheduler slots: `
+            + JSON.stringify(schedulerState.active));
+          assert(!fab?.querySelector('.oit-fab-btn')?.classList.contains('translating'),
+            'mixed-lane completion left the floating button spinning');
+        } finally {
+          releaseFeedRequests = true;
+          releaseNavigationRequests = true;
+          for (const request of pendingFeedRequests.splice(0)) {
+            request.resolve(responseFor(request.message));
+          }
+          for (const request of pendingNavigationRequests.splice(0)) {
+            request.resolve(responseFor(request.message));
+          }
+          chrome.runtime.sendMessage = originalSendMessage;
+          removeAllTranslations();
+          hideFAB();
+          state.fullReset();
+        }
+      });
+
+      test('X supplemental sidebar survives boilerplate filtering and uses its own lane', async () => {
+        resetContentState();
+        hideFAB();
+        const originalSendMessage = chrome.runtime.sendMessage;
+        const requests = [];
+        const pendingBodyRequests = [];
+        const pendingSupplementalRequests = [];
+        let releaseBodyRequests = false;
+        let releaseSupplementalRequests = false;
+        const waitFor = async (predicate, timeout = 2500) => {
+          const deadline = performance.now() + timeout;
+          while (performance.now() < deadline) {
+            if (predicate()) return true;
+            await sleep(20);
+          }
+          return predicate();
+        };
+        const isBodyRequest = message => message.texts.some(text => (
+          text.includes('Reserved body content')
+        ));
+        const isSupplementalRequest = message => message.texts.some(text => (
+          text.includes('What is happening')
+          || text.includes('Multilingual readers')
+          || text.includes('Fresh sidebar card')
+        ));
+        const responseFor = message => ({
+          translations: message.texts.map(pseudoTranslate)
+        });
+
+        document.title = 'X supplemental lane integration';
+        document.body.innerHTML = `
+          <div style="display:flex;gap:24px;width:1000px;height:700px">
+            <main id="x-supplemental-main"
+                  style="display:block;width:640px;height:680px">
+              <article>
+                <p>Reserved body content remains active while sidebar cards load.</p>
+              </article>
+            </main>
+            <div id="x-supplemental-column"
+                 data-testid="sidebarColumn"
+                 style="display:block;width:320px;height:680px">
+              <aside id="x-supplemental-aside"
+                     role="complementary"
+                     aria-label="Timeline: Trending now"
+                     style="display:block;width:300px;height:620px">
+                <h2 id="x-supplemental-heading">What is happening</h2>
+                <div data-testid="UserCell"
+                     style="display:block;width:280px;height:100px">
+                  <div id="x-supplemental-user-bio" lang="en" dir="auto">
+                    Multilingual readers need immediate sidebar translations.
+                  </div>
+                </div>
+              </aside>
+            </div>
+          </div>
+        `;
+
+        state.config = {
+          showOriginal: true,
+          autoDetect: false,
+          targetLang: 'zh-CN',
+          maxConcurrent: 3,
+          translationScope: 'smart'
+        };
+        state.scope = 'smart';
+        state.isActive = true;
+        state.shouldStop = false;
+        state.lifecycle.start();
+        state.scanContext = pageScanner.createScanContext({
+          scope: 'smart',
+          site: 'x'
+        });
+        startMutationObserver();
+        chrome.runtime.sendMessage = message => {
+          if (message.action === 'abortRequest') {
+            return Promise.resolve({ success: true });
+          }
+          if (message.action !== 'translate') {
+            return Promise.resolve({ translations: [] });
+          }
+
+          requests.push(message);
+          if (isSupplementalRequest(message)) {
+            if (releaseSupplementalRequests) {
+              return Promise.resolve(responseFor(message));
+            }
+            return new Promise(resolve => {
+              pendingSupplementalRequests.push({ message, resolve });
+            });
+          }
+          if (isBodyRequest(message)) {
+            if (releaseBodyRequests) {
+              return Promise.resolve(responseFor(message));
+            }
+            return new Promise(resolve => {
+              pendingBodyRequests.push({ message, resolve });
+            });
+          }
+          return Promise.resolve(responseFor(message));
+        };
+
+        let queueTask = null;
+        try {
+          const blocks = collectViewportBlocks();
+          const headingBlock = blocks.find(block => (
+            block.element.id === 'x-supplemental-heading'
+          ));
+          const bioBlock = blocks.find(block => (
+            block.element.id === 'x-supplemental-user-bio'
+          ));
+          assert(headingBlock?.siteRole === 'supplemental-content',
+            `sidebar heading lost supplemental semantics: `
+              + `${JSON.stringify(headingBlock)}`);
+          assert(bioBlock?.siteRole === 'supplemental-content',
+            `sidebar user bio lost supplemental semantics: `
+              + `${JSON.stringify(bioBlock)}`);
+
+          blocks.forEach(block => addToQueue(block));
+          queueTask = processQueue();
+
+          assert(await waitFor(() => pendingBodyRequests.length === 1),
+            'body request did not occupy the bounded body lane');
+          assert(await waitFor(() => pendingSupplementalRequests.length === 1),
+            'supplemental request did not start in its reserved lane');
+
+          let schedulerState = state.requestScheduler.snapshot();
+          assert(schedulerState.bodyLimit === 1
+              && schedulerState.supplementalReserve === 1,
+          `unexpected supplemental scheduler limits: `
+            + `${JSON.stringify(schedulerState)}`);
+          assert(schedulerState.active.body === 1
+              && schedulerState.active.supplemental === 1
+              && schedulerState.active.total === 2,
+          `sidebar content did not use the supplemental lane: `
+            + JSON.stringify({
+              active: schedulerState.active,
+              requests: requests.map(request => request.texts),
+              pendingBodyRequests: pendingBodyRequests.length,
+              pendingSupplementalRequests: pendingSupplementalRequests.length,
+              inflightRequests: Array.from(state.inflightRequests.values())
+                .map(request => request.blocks.map(block => block.element.id))
+            }));
+
+          releaseSupplementalRequests = true;
+          for (const request of pendingSupplementalRequests.splice(0)) {
+            request.resolve(responseFor(request.message));
+          }
+          assert(await waitFor(() => (
+            document.querySelector('#x-supplemental-heading > .oit-translation')
+            && document.querySelector('#x-supplemental-user-bio > .oit-translation')
+          )), 'supplemental sidebar translation did not render');
+
+          const aside = document.querySelector('#x-supplemental-aside');
+          aside.insertAdjacentHTML('beforeend', `
+            <div data-testid="trend">
+              <div id="x-supplemental-late-card" lang="en" dir="ltr">
+                Fresh sidebar card content must translate after DOM insertion.
+              </div>
+            </div>
+          `);
+          assert(await waitFor(() => (
+            document.querySelector('#x-supplemental-late-card > .oit-translation')
+          )), 'late supplemental sidebar card was not translated');
+
+          schedulerState = state.requestScheduler.snapshot();
+          assert(schedulerState.active.body === 1,
+            `body request unexpectedly released during supplemental work: `
+              + JSON.stringify(schedulerState.active));
+          assert(getTranslationStateSnapshot().diagnostics
+            .activeSupplementalTranslations >= 0,
+          'supplemental active diagnostics are missing');
+
+          releaseBodyRequests = true;
+          for (const request of pendingBodyRequests.splice(0)) {
+            request.resolve(responseFor(request.message));
+          }
+          await queueTask;
+          assert(await waitFor(() => isTranslationPipelineIdle()),
+            'supplemental integration pipeline did not return to idle');
+
+          schedulerState = state.requestScheduler.snapshot();
+          assert(schedulerState.active.total === 0
+              && schedulerState.active.body === 0
+              && schedulerState.active.supplemental === 0,
+          `supplemental integration leaked scheduler slots: `
+            + JSON.stringify(schedulerState.active));
+        } finally {
+          releaseBodyRequests = true;
+          releaseSupplementalRequests = true;
+          for (const request of pendingBodyRequests.splice(0)) {
+            request.resolve(responseFor(request.message));
+          }
+          for (const request of pendingSupplementalRequests.splice(0)) {
+            request.resolve(responseFor(request.message));
+          }
+          chrome.runtime.sendMessage = originalSendMessage;
+          removeAllTranslations();
+          hideFAB();
+          state.fullReset();
+        }
+      });
+
+      test('X navigation labels translate end to end without replacing controls or metadata', async () => {
+        resetContentState();
+        const originalSendMessage = chrome.runtime.sendMessage;
+        const requests = [];
+        document.title = 'X navigation integration';
+        document.body.innerHTML = `
+          <div id="x-e2e-shell" style="display:flex;width:900px;height:640px">
+            <div id="x-e2e-rail" style="display:block;width:240px;height:520px">
+              <a id="x-e2e-home" href="/home"
+                 style="display:flex;width:220px;height:36px;overflow:hidden;
+                        max-height:36px;-webkit-line-clamp:1">
+                <span id="x-e2e-home-label" style="display:block">Home</span>
+                <span id="x-e2e-home-badge">4</span>
+              </a>
+              <a id="x-e2e-profile" href="/alice"
+                 style="display:flex;width:220px;height:36px">
+                <span id="x-e2e-profile-label">Profile</span>
+              </a>
+              <button id="x-e2e-more" type="button"
+                      style="display:flex;width:220px;height:36px">
+                <span id="x-e2e-more-label">More</span>
+              </button>
+            </div>
+            <main id="x-e2e-main" style="display:block;width:640px;height:600px">
+              <div id="x-e2e-tabs"
+                   style="display:flex;width:600px;height:40px;overflow:hidden;
+                          max-height:40px;-webkit-line-clamp:1">
+                <a id="x-e2e-for-you" role="tab" href="/home"
+                   style="display:block;width:280px;height:32px">
+                  <span id="x-e2e-for-you-label">For you</span>
+                </a>
+                <a id="x-e2e-following" role="tab" href="/home?filter=following"
+                   style="display:block;width:280px;height:32px">
+                  <span id="x-e2e-following-label">Following</span>
+                </a>
+              </div>
+              <article>
+                <div id="x-e2e-post" data-testid="tweetText" lang="en" dir="auto">
+                  Navigation and feed content should translate in the same page session.
+                </div>
+              </article>
+            </main>
+          </div>
+        `;
+
+        const home = document.querySelector('#x-e2e-home');
+        const profile = document.querySelector('#x-e2e-profile');
+        const more = document.querySelector('#x-e2e-more');
+        const badge = document.querySelector('#x-e2e-home-badge');
+        const homeHref = home.getAttribute('href');
+        const profileHref = profile.getAttribute('href');
+        let homeClicks = 0;
+        let profileClicks = 0;
+        let moreClicks = 0;
+        home.addEventListener('click', event => {
+          event.preventDefault();
+          homeClicks++;
+        });
+        profile.addEventListener('click', event => {
+          event.preventDefault();
+          profileClicks++;
+        });
+        more.addEventListener('click', () => moreClicks++);
+
+        state.config = {
+          showOriginal: true,
+          autoDetect: false,
+          targetLang: 'zh-CN',
+          maxConcurrent: 4,
+          translationScope: 'smart'
+        };
+        state.scope = 'smart';
+        state.isActive = true;
+        state.shouldStop = false;
+        state.scanContext = pageScanner.createScanContext({
+          scope: 'smart',
+          site: 'x'
+        });
+        chrome.runtime.sendMessage = async message => {
+          if (message.action !== 'translate') return { translations: [] };
+          requests.push(message);
+          return { translations: message.texts.map(pseudoTranslate) };
+        };
+
+        try {
+          const blocks = collectViewportBlocks();
+          const labels = new Map(blocks.map(block => [block.element.id, block]));
+          for (const expected of [
+            'x-e2e-home-label',
+            'x-e2e-profile-label',
+            'x-e2e-more-label',
+            'x-e2e-for-you-label',
+            'x-e2e-following-label',
+            'x-e2e-post'
+          ]) {
+            assert(labels.has(expected),
+              `X end-to-end collection omitted ${expected}`);
+          }
+
+          blocks.forEach(block => addToQueue(block));
+          await processQueue();
+
+          for (const expected of [
+            'x-e2e-home-label',
+            'x-e2e-profile-label',
+            'x-e2e-more-label',
+            'x-e2e-for-you-label',
+            'x-e2e-following-label',
+            'x-e2e-post'
+          ]) {
+            const host = document.querySelector(`#${expected}`);
+            const translation = host?.querySelector(':scope > .oit-translation');
+            assert(translation,
+              `X end-to-end translation was not rendered for ${expected}`);
+            const rect = translation.getBoundingClientRect();
+            assert(rect.width > 0 && rect.height > 0,
+              `X end-to-end translation is not visible for ${expected}`);
+          }
+
+          assert(document.querySelector('#x-e2e-home') === home,
+            'translation replaced the Home anchor');
+          assert(document.querySelector('#x-e2e-profile') === profile,
+            'translation replaced the Profile anchor');
+          assert(document.querySelector('#x-e2e-more') === more,
+            'translation replaced the More button');
+          assert(home.getAttribute('href') === homeHref,
+            'translation changed the Home href');
+          assert(profile.getAttribute('href') === profileHref,
+            'translation changed the Profile href');
+
+          home.click();
+          profile.click();
+          more.click();
+          assert(homeClicks === 1 && profileClicks === 1 && moreClicks === 1,
+            'translation removed an existing control click listener');
+
+          assert(document.querySelector('#x-e2e-home-badge') === badge,
+            'translation replaced the notification badge');
+          assert(badge.textContent.trim() === '4',
+            'translation changed notification badge text');
+          assert(!badge.querySelector('.oit-translation'),
+            'translation was inserted into notification badge text');
+
+          const homeLabel = document.querySelector('#x-e2e-home-label');
+          assert(home.style.height === 'auto',
+            'fixed navigation height was not released for bilingual content');
+          assert(home.style.maxHeight === 'none',
+            'navigation max-height still clips bilingual content');
+          assert(home.style.webkitLineClamp === 'none',
+            'navigation line clamp still clips bilingual content');
+          assert(!homeLabel.classList.contains('oit-pending')
+              && !homeLabel.classList.contains('oit-translating-text'),
+          'translated navigation label retained a pending spinner state');
+        } finally {
+          chrome.runtime.sendMessage = originalSendMessage;
+          removeAllTranslations();
+          state.fullReset();
+        }
+      });
+
+      test('authenticated X SideNav and AppTabBar text survives the complete translation path', async () => {
+        resetContentState();
+        const originalSendMessage = chrome.runtime.sendMessage;
+        const requests = [];
+        const waitFor = async (predicate, timeout = 2000) => {
+          const deadline = performance.now() + timeout;
+          while (performance.now() < deadline) {
+            if (predicate()) return true;
+            await sleep(20);
+          }
+          return predicate();
+        };
+        const isVisibleWithin = element => {
+          const rect = element?.getBoundingClientRect();
+          if (!rect || rect.width <= 0 || rect.height <= 0) return false;
+          let visibleRect = {
+            top: rect.top,
+            right: rect.right,
+            bottom: rect.bottom,
+            left: rect.left
+          };
+          let current = element.parentElement;
+          while (current && current !== document.body) {
+            const style = getComputedStyle(current);
+            if (['hidden', 'clip'].includes(style.overflow)
+                || ['hidden', 'clip'].includes(style.overflowY)) {
+              const clipRect = current.getBoundingClientRect();
+              visibleRect = {
+                top: Math.max(visibleRect.top, clipRect.top),
+                right: Math.min(visibleRect.right, clipRect.right),
+                bottom: Math.min(visibleRect.bottom, clipRect.bottom),
+                left: Math.max(visibleRect.left, clipRect.left)
+              };
+            }
+            current = current.parentElement;
+          }
+          return visibleRect.right > visibleRect.left
+            && visibleRect.bottom > visibleRect.top;
+        };
+
+        document.title = 'Authenticated X navigation';
+        document.body.innerHTML = `
+          <div style="display:flex;align-items:flex-start;width:960px;height:680px">
+            <div data-testid="SideNav"
+                 style="display:block;width:240px;height:420px;overflow:hidden">
+              <a id="x-auth-home-control"
+                 data-testid="SideNav_Home_Link"
+                 href="/home"
+                 style="display:flex;align-items:center;width:220px;height:38px;
+                        max-height:38px;overflow:hidden">
+                <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+                  <path d="M3 11 12 3l9 8v10h-6v-6h-6v6H3z"></path>
+                </svg>
+                <span id="x-auth-home-label">Home</span>
+                <span id="x-auth-home-badge">7</span>
+              </a>
+              <a id="x-auth-explore-control"
+                 data-testid="SideNav_Explore_Link"
+                 href="/explore"
+                 style="display:flex;align-items:center;width:220px;height:38px;
+                        max-height:38px;overflow:hidden">
+                <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+                  <circle cx="11" cy="11" r="7"></circle>
+                </svg>
+                <span id="x-auth-explore-label">Explore</span>
+              </a>
+              <button id="x-auth-compose-control"
+                      data-testid="SideNav_NewTweet_Button"
+                      type="button"
+                      style="display:flex;align-items:center;width:220px;height:42px;
+                             max-height:42px;overflow:hidden">
+                <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+                  <path d="M12 4v16M4 12h16"></path>
+                </svg>
+                <span id="x-auth-compose-label">Post</span>
+              </button>
+            </div>
+            <main style="display:block;width:700px;height:640px">
+              <div data-testid="AppTabBar"
+                   style="display:flex;width:640px;height:44px;max-height:44px;
+                          overflow:hidden">
+                <a id="x-auth-for-you-control"
+                   data-testid="AppTabBar_Home_Link"
+                   role="tab"
+                   href="/home"
+                   style="display:flex;align-items:center;justify-content:center;
+                          width:210px;height:40px;max-height:40px;overflow:hidden">
+                  <span id="x-auth-for-you-label">For you</span>
+                </a>
+                <a id="x-auth-following-control"
+                   data-testid="AppTabBar_Following_Link"
+                   role="tab"
+                   href="/home?filter=following"
+                   style="display:flex;align-items:center;justify-content:center;
+                          width:210px;height:40px;max-height:40px;overflow:hidden">
+                  <span id="x-auth-following-label">Following</span>
+                </a>
+                <a id="x-auth-notifications-control"
+                   data-testid="AppTabBar_Notifications_Link"
+                   role="tab"
+                   href="/notifications"
+                   style="display:flex;align-items:center;justify-content:center;
+                          width:210px;height:40px;max-height:40px;overflow:hidden">
+                  <span id="x-auth-notifications-label">Notifications</span>
+                </a>
+              </div>
+              <article>
+                <div id="x-auth-post" data-testid="tweetText" lang="en" dir="auto">
+                  Authenticated timeline content remains eligible with persistent navigation.
+                </div>
+              </article>
+            </main>
+          </div>
+        `;
+
+        const expectedLabels = [
+          'x-auth-home-label',
+          'x-auth-explore-label',
+          'x-auth-compose-label',
+          'x-auth-for-you-label',
+          'x-auth-following-label',
+          'x-auth-notifications-label'
+        ];
+        const controls = [
+          'x-auth-home-control',
+          'x-auth-explore-control',
+          'x-auth-compose-control',
+          'x-auth-for-you-control',
+          'x-auth-following-control',
+          'x-auth-notifications-control'
+        ].map(id => document.querySelector(`#${id}`));
+        const hrefs = controls.map(control => control.getAttribute('href'));
+        const clicks = controls.map(() => 0);
+        controls.forEach((control, index) => {
+          control.addEventListener('click', event => {
+            event.preventDefault();
+            clicks[index]++;
+          });
+        });
+        const badge = document.querySelector('#x-auth-home-badge');
+        const badgeText = badge.textContent;
+
+        state.config = {
+          showOriginal: true,
+          autoDetect: false,
+          targetLang: 'zh-CN',
+          maxConcurrent: 4,
+          translationScope: 'smart'
+        };
+        state.scope = 'smart';
+        state.isActive = true;
+        state.shouldStop = false;
+        state.scanContext = pageScanner.createScanContext({
+          scope: 'smart',
+          site: 'x'
+        });
+        chrome.runtime.sendMessage = async message => {
+          if (message.action !== 'translate') return { translations: [] };
+          requests.push(message);
+          return { translations: message.texts.map(pseudoTranslate) };
+        };
+
+        try {
+          const blocks = collectViewportBlocks();
+          const labelBlocks = new Map(
+            blocks
+              .filter(block => block.siteRole === 'navigation-label')
+              .map(block => [block.element.id, block])
+          );
+          for (const expected of expectedLabels) {
+            assert(labelBlocks.has(expected),
+              `authenticated X scan omitted navigation label ${expected}`);
+          }
+
+          blocks.forEach(block => addToQueue(block));
+          await processQueue();
+          assert(await waitFor(() => expectedLabels.every(id => (
+            document.querySelector(`#${id}`)?.querySelector(':scope > .oit-translation')
+          ))), 'authenticated X navigation did not render every visible translation');
+
+          for (const id of expectedLabels) {
+            const host = document.querySelector(`#${id}`);
+            const translation = host.querySelector(':scope > .oit-translation');
+            assert(isVisibleWithin(host) && isVisibleWithin(translation),
+              `authenticated X translation is clipped or invisible for ${id}`);
+          }
+
+          controls.forEach((control, index) => {
+            assert(document.querySelector(`#${control.id}`) === control,
+              `authenticated X translation replaced control ${control.id}`);
+            assert(control.getAttribute('href') === hrefs[index],
+              `authenticated X translation changed href for ${control.id}`);
+            control.click();
+            assert(clicks[index] === 1,
+              `authenticated X translation removed listener for ${control.id}`);
+          });
+          assert(document.querySelector('#x-auth-home-badge') === badge,
+            'authenticated X translation replaced the notification badge');
+          assert(badge.textContent === badgeText && !badge.querySelector('.oit-translation'),
+            'authenticated X translation modified notification badge content');
+          assert(requests.some(message => message.texts.some(text => text.includes('Home'))),
+            'authenticated X navigation labels never reached the provider');
+        } finally {
+          chrome.runtime.sendMessage = originalSendMessage;
+          removeAllTranslations();
+          state.fullReset();
+        }
+      });
+
+      test('nested authenticated X shells translate later sibling actions end to end', async () => {
+        resetContentState();
+        const originalSendMessage = chrome.runtime.sendMessage;
+        const requests = [];
+        const waitFor = async (predicate, timeout = 3000) => {
+          const deadline = performance.now() + timeout;
+          while (performance.now() < deadline) {
+            if (predicate()) return true;
+            await sleep(20);
+          }
+          return predicate();
+        };
+        const isVisibleWithin = element => {
+          const rect = element?.getBoundingClientRect();
+          if (!rect || rect.width <= 0 || rect.height <= 0) return false;
+          let visibleRect = {
+            top: rect.top,
+            right: rect.right,
+            bottom: rect.bottom,
+            left: rect.left
+          };
+          let current = element.parentElement;
+          while (current && current !== document.body) {
+            const style = getComputedStyle(current);
+            if (['hidden', 'clip'].includes(style.overflow)
+                || ['hidden', 'clip'].includes(style.overflowY)) {
+              const clipRect = current.getBoundingClientRect();
+              visibleRect = {
+                top: Math.max(visibleRect.top, clipRect.top),
+                right: Math.min(visibleRect.right, clipRect.right),
+                bottom: Math.min(visibleRect.bottom, clipRect.bottom),
+                left: Math.max(visibleRect.left, clipRect.left)
+              };
+            }
+            current = current.parentElement;
+          }
+          return visibleRect.right > visibleRect.left
+            && visibleRect.bottom > visibleRect.top;
+        };
+
+        document.title = 'Incremental authenticated X shells';
+        document.body.innerHTML = `
+          <div style="display:flex;align-items:flex-start;width:960px;height:680px">
+            <div id="x-late-shell-sidebar"
+                 data-testid="SideNav"
+                 style="display:block;width:240px;height:460px;overflow:hidden">
+              <div id="x-late-shell-side-route-cluster"
+                   style="display:block;width:220px;height:80px;overflow:hidden">
+                <a id="x-late-shell-home-control"
+                   data-testid="SideNav_Home_Link"
+                   href="/home"
+                   style="display:flex;width:220px;height:38px;max-height:38px;
+                          overflow:hidden">
+                  <span id="x-late-shell-home-label"
+                        style="display:-webkit-box;height:24px;max-height:24px;
+                               overflow:hidden;-webkit-line-clamp:1">Home</span>
+                </a>
+                <a id="x-late-shell-explore-control"
+                   data-testid="SideNav_Explore_Link"
+                   href="/explore"
+                   style="display:flex;width:220px;height:38px;max-height:38px;
+                          overflow:hidden">
+                  <span id="x-late-shell-explore-label"
+                        style="display:-webkit-box;height:24px;max-height:24px;
+                               overflow:hidden;-webkit-line-clamp:1">Explore</span>
+                </a>
+              </div>
+            </div>
+            <main style="display:block;width:700px;height:640px">
+              <div id="x-late-shell-appbar"
+                   data-testid="AppTabBar"
+                   style="display:flex;width:640px;height:52px;overflow:hidden">
+                <div id="x-late-shell-app-route-cluster"
+                     style="display:flex;width:320px;height:44px;overflow:hidden">
+                  <a id="x-late-shell-for-you-control"
+                     data-testid="AppTabBar_Home_Link"
+                     role="tab"
+                     href="/home"
+                     style="display:flex;width:160px;height:40px;max-height:40px;
+                            overflow:hidden">
+                    <span id="x-late-shell-for-you-label">For you</span>
+                  </a>
+                  <a id="x-late-shell-following-control"
+                     data-testid="AppTabBar_Following_Link"
+                     role="tab"
+                     href="/home?filter=following"
+                     style="display:flex;width:160px;height:40px;max-height:40px;
+                            overflow:hidden">
+                    <span id="x-late-shell-following-label">Following</span>
+                  </a>
+                </div>
+              </div>
+              <article>
+                <div id="x-late-shell-post"
+                     data-testid="tweetText"
+                     lang="en"
+                     dir="auto">
+                  A stable post keeps the authenticated translation session active.
+                </div>
+              </article>
+            </main>
+          </div>
+        `;
+
+        state.config = {
+          showOriginal: true,
+          autoDetect: false,
+          targetLang: 'zh-CN',
+          maxConcurrent: 4,
+          translationScope: 'smart'
+        };
+        state.scope = 'smart';
+        state.isActive = true;
+        state.shouldStop = false;
+        state.lifecycle.start();
+        state.scanContext = pageScanner.createScanContext({
+          scope: 'smart',
+          site: 'x'
+        });
+        chrome.runtime.sendMessage = async message => {
+          if (message.action === 'abortRequest') return { success: true };
+          if (message.action !== 'translate') return { translations: [] };
+          requests.push(message);
+          return { translations: message.texts.map(pseudoTranslate) };
+        };
+
+        try {
+          startMutationObserver();
+          collectViewportBlocks().forEach(block => addToQueue(block));
+          await processQueue();
+          assert(await waitFor(() => [
+            'x-late-shell-home-label',
+            'x-late-shell-explore-label',
+            'x-late-shell-for-you-label',
+            'x-late-shell-following-label'
+          ].every(id => document.querySelector(`#${id}`)
+            ?.querySelector(':scope > .oit-translation'))),
+          'initial nested X route clusters did not translate');
+          assert(await waitFor(() => isTranslationPipelineIdle()),
+            'initial nested X translation did not return to idle');
+          assert(settleTranslationPipeline(),
+            'initial nested X translation did not settle before dynamic updates');
+
+          const sidebar = document.querySelector('#x-late-shell-sidebar');
+          const appbar = document.querySelector('#x-late-shell-appbar');
+          const definitions = [
+            ['side-compose', 'button', 'SideNav_NewTweet_Button', null, 'Post'],
+            ['side-account', 'button', 'SideNav_AccountSwitcher_Button', null, 'Account'],
+            ['side-more', 'button', 'SideNav_More_Button', null, 'More'],
+            ['app-notifications', 'a', 'AppTabBar_Notifications_Link',
+              '/notifications', 'Notifications'],
+            ['app-messages', 'a', 'AppTabBar_Messages_Link', '/messages', 'Messages']
+          ];
+          const sideFragment = document.createDocumentFragment();
+          const appFragment = document.createDocumentFragment();
+          const controls = new Map();
+
+          for (const [suffix, tagName, testId, href, label] of definitions) {
+            const control = document.createElement(tagName);
+            control.id = `x-late-shell-${suffix}-control`;
+            control.dataset.testid = testId;
+            if (href) control.setAttribute('href', href);
+            if (tagName === 'button') control.type = 'button';
+            control.setAttribute(
+              'style',
+              'display:flex;width:210px;height:42px;max-height:42px;'
+                + 'overflow:hidden;-webkit-line-clamp:1'
+            );
+            control.innerHTML = `
+              <span id="x-late-shell-${suffix}-label"
+                    style="display:-webkit-box;height:24px;max-height:24px;
+                           overflow:hidden;-webkit-line-clamp:1;
+                           -webkit-box-orient:vertical">${label}</span>
+            `;
+            const originalHref = control.getAttribute('href');
+            const clickState = { count: 0, originalHref };
+            control.addEventListener('click', event => {
+              event.preventDefault();
+              clickState.count++;
+            });
+            controls.set(suffix, { control, clickState, label });
+            (suffix.startsWith('side-') ? sideFragment : appFragment).append(control);
+          }
+
+          sidebar.append(sideFragment);
+          appbar.append(appFragment);
+
+          assert(await waitFor(() => definitions.every(([suffix]) => {
+            const { control } = controls.get(suffix);
+            return control.querySelector('.oit-translation');
+          })), 'late X shell siblings did not render translations: '
+            + `${JSON.stringify(state.dynamicDiagnostics)}`);
+
+          const requestedText = requests.flatMap(request => request.texts).join(' ');
+          for (const [suffix, , , , label] of definitions) {
+            const { control, clickState } = controls.get(suffix);
+            const host = control.querySelector(`[id$="${suffix}-label"]`);
+            const translation = host?.querySelector(':scope > .oit-translation');
+            assert(translation, `late X shell translation is missing for ${suffix}`);
+            assert(isVisibleWithin(host) && isVisibleWithin(translation),
+              `late X shell translation is clipped for ${suffix}`);
+            assert(control.style.height === 'auto'
+                && control.style.maxHeight === 'none'
+                && control.style.webkitLineClamp === 'none',
+            `late X shell control still clips the bilingual label for ${suffix}`);
+            assert(document.querySelector(`#${control.id}`) === control,
+              `late X shell translation replaced the control for ${suffix}`);
+            assert(control.getAttribute('href') === clickState.originalHref,
+              `late X shell translation changed href metadata for ${suffix}`);
+            control.click();
+            assert(clickState.count === 1,
+              `late X shell translation removed the click listener for ${suffix}`);
+            assert(requestedText.includes(label),
+              `late X shell provider request omitted ${label}`);
+          }
+          assert(document.querySelector('#x-late-shell-sidebar') === sidebar
+              && document.querySelector('#x-late-shell-appbar') === appbar,
+          'late X shell translation replaced an authenticated shell');
+          assert(state.dynamicDiagnostics.roots >= definitions.length
+              && state.dynamicDiagnostics.candidates >= definitions.length
+              && state.dynamicDiagnostics.blocks >= definitions.length,
+          'late X shell siblings did not traverse the dynamic mutation pipeline: '
+            + `${JSON.stringify(state.dynamicDiagnostics)}`);
+          assert(await waitFor(() => isTranslationPipelineIdle()),
+            'late X shell translation did not return the pipeline to idle');
+          assert(settleTranslationPipeline(),
+            'late X shell translation did not settle the existing session');
+          assert(state.isActive,
+            'late X shell translation stopped future dynamic observation');
+        } finally {
+          chrome.runtime.sendMessage = originalSendMessage;
+          removeAllTranslations();
+          state.fullReset();
+        }
+      });
+
+      test('React-style X navigation updates replace stale translations through the observer path', async () => {
+        resetContentState();
+        const originalSendMessage = chrome.runtime.sendMessage;
+        const requests = [];
+        const waitFor = async (predicate, timeout = 2500) => {
+          const deadline = performance.now() + timeout;
+          while (performance.now() < deadline) {
+            if (predicate()) return true;
+            await sleep(20);
+          }
+          return predicate();
+        };
+
+        document.title = 'Dynamic authenticated X navigation';
+        document.body.innerHTML = `
+          <div style="display:flex;width:960px;height:680px">
+            <div data-testid="SideNav"
+                 style="display:block;width:240px;height:420px">
+              <a id="x-dynamic-home-control"
+                 data-testid="SideNav_Home_Link"
+                 href="/home"
+                 style="display:flex;width:220px;height:38px;max-height:38px;
+                        overflow:hidden">
+                <span id="x-dynamic-home-label"
+                      style="display:-webkit-box;height:24px;max-height:24px;
+                             overflow:hidden;-webkit-line-clamp:1">Home</span>
+              </a>
+              <a id="x-dynamic-following-control"
+                 data-testid="SideNav_Following_Link"
+                 href="/following"
+                 style="display:flex;width:220px;height:38px;max-height:38px;
+                        overflow:hidden">
+                <span id="x-dynamic-following-label"
+                      style="display:-webkit-box;height:24px;max-height:24px;
+                             overflow:hidden;-webkit-line-clamp:1">Following</span>
+              </a>
+              <button id="x-dynamic-more-control"
+                      data-testid="SideNav_More_Button"
+                      type="button"
+                      style="display:flex;width:220px;height:38px;max-height:38px;
+                             overflow:hidden">
+                <span id="x-dynamic-more-label"
+                      style="display:-webkit-box;height:24px;max-height:24px;
+                             overflow:hidden;-webkit-line-clamp:1">More</span>
+              </button>
+            </div>
+            <main style="display:block;width:700px;height:640px">
+              <div data-testid="AppTabBar"
+                   style="display:flex;width:640px;height:44px">
+                <a id="x-dynamic-for-you-control"
+                   data-testid="AppTabBar_Home_Link"
+                   role="tab"
+                   href="/home"
+                   style="display:flex;width:210px;height:40px">
+                  <span id="x-dynamic-for-you-label">For you</span>
+                </a>
+                <a id="x-dynamic-explore-control"
+                   data-testid="AppTabBar_Explore_Link"
+                   role="tab"
+                   href="/explore"
+                   style="display:flex;width:210px;height:40px">
+                  <span id="x-dynamic-explore-label">Explore</span>
+                </a>
+                <a id="x-dynamic-notifications-control"
+                   data-testid="AppTabBar_Notifications_Link"
+                   role="tab"
+                   href="/notifications"
+                   style="display:flex;width:210px;height:40px">
+                  <span id="x-dynamic-notifications-label">Notifications</span>
+                </a>
+              </div>
+              <article>
+                <div id="x-dynamic-post" data-testid="tweetText" lang="en" dir="auto">
+                  A stable post keeps the authenticated X shell under the smart page root.
+                </div>
+              </article>
+            </main>
+          </div>
+        `;
+
+        const homeLabel = document.querySelector('#x-dynamic-home-label');
+        const followingLabel = document.querySelector('#x-dynamic-following-label');
+        const homeSourceNode = homeLabel.firstChild;
+        const homeControl = document.querySelector('#x-dynamic-home-control');
+        const followingControl = document.querySelector('#x-dynamic-following-control');
+        const homeHref = homeControl.getAttribute('href');
+        const followingHref = followingControl.getAttribute('href');
+        let homeClicks = 0;
+        let followingClicks = 0;
+        homeControl.addEventListener('click', event => {
+          event.preventDefault();
+          homeClicks++;
+        });
+        followingControl.addEventListener('click', event => {
+          event.preventDefault();
+          followingClicks++;
+        });
+
+        state.config = {
+          showOriginal: true,
+          autoDetect: false,
+          targetLang: 'zh-CN',
+          maxConcurrent: 4,
+          translationScope: 'smart'
+        };
+        state.scope = 'smart';
+        state.isActive = true;
+        state.shouldStop = false;
+        state.lifecycle.start();
+        state.scanContext = pageScanner.createScanContext({
+          scope: 'smart',
+          site: 'x'
+        });
+        chrome.runtime.sendMessage = async message => {
+          if (message.action === 'abortRequest') return { success: true };
+          if (message.action !== 'translate') return { translations: [] };
+          requests.push(message);
+          return { translations: message.texts.map(pseudoTranslate) };
+        };
+
+        try {
+          startMutationObserver();
+          collectViewportBlocks().forEach(block => addToQueue(block));
+          await processQueue();
+          assert(await waitFor(() => (
+            homeLabel.querySelector(':scope > .oit-translation')
+            && followingLabel.querySelector(':scope > .oit-translation')
+          )), 'initial authenticated X navigation translation did not render');
+
+          startMutationObserver();
+          homeSourceNode.data = 'Start';
+          followingLabel.replaceChildren(document.createTextNode('Following you'));
+
+          assert(await waitFor(() => {
+            const homeTranslation = homeLabel.querySelector(':scope > .oit-translation');
+            const followingTranslation = followingLabel.querySelector(':scope > .oit-translation');
+            return homeTranslation?.textContent.includes('译Start')
+              && followingTranslation?.textContent.includes('译Following')
+              && followingTranslation.textContent.includes('译you');
+          }), `React-style X navigation updates were not retranslated; `
+            + `dynamic=${JSON.stringify(state.dynamicDiagnostics)}`);
+
+          assert(homeLabel.querySelectorAll(':scope > .oit-translation').length === 1,
+            'characterData update left duplicate translations in the Home label');
+          assert(followingLabel.querySelectorAll(':scope > .oit-translation').length === 1,
+            'node replacement left duplicate translations in the Following label');
+          assert(!homeLabel.textContent.includes('Home'),
+            'characterData update left the stale Home translation in place');
+          assert(!followingLabel.textContent.includes('译Following\n')
+              && followingLabel.querySelector('.oit-translation')?.textContent.includes('译you'),
+          'node replacement retained the stale Following translation');
+          assert(document.querySelector('#x-dynamic-home-control') === homeControl
+              && document.querySelector('#x-dynamic-following-control') === followingControl,
+          'React-style retranslation replaced a navigation control');
+          assert(homeControl.getAttribute('href') === homeHref
+              && followingControl.getAttribute('href') === followingHref,
+          'React-style retranslation changed navigation href metadata');
+          homeControl.click();
+          followingControl.click();
+          assert(homeClicks === 1 && followingClicks === 1,
+            'React-style retranslation removed a navigation click listener');
+          assert(await waitFor(() => isTranslationPipelineIdle()),
+            'React-style X navigation retranslation left the pipeline busy');
+          assert(settleTranslationPipeline(),
+            'React-style X navigation retranslation did not settle');
+        } finally {
+          chrome.runtime.sendMessage = originalSendMessage;
+          removeAllTranslations();
+          state.fullReset();
+        }
+      });
+
+      test('React restructuring keeps one complex control label translation host', async () => {
+        resetContentState();
+        const originalSendMessage = chrome.runtime.sendMessage;
+        const requests = [];
+        const waitFor = async (predicate, timeout = 2500) => {
+          const deadline = performance.now() + timeout;
+          while (performance.now() < deadline) {
+            if (predicate()) return true;
+            await sleep(20);
+          }
+          return predicate();
+        };
+
+        document.body.innerHTML = `
+          <div style="display:flex;width:980px;height:680px">
+            <header id="x-complex-integration-nav"
+                    style="display:block;width:230px;height:300px">
+              <a id="x-complex-integration-home"
+                 href="/home"
+                 style="display:flex;width:220px;height:44px;overflow:hidden">
+                <svg aria-hidden="true"><path d="M0 0h12v12z"></path></svg>
+                <div>
+                  <span id="x-complex-integration-home-label">
+                    <span>Home</span><span>timeline</span>
+                  </span>
+                  <span id="x-complex-integration-home-status" role="status">Live</span>
+                  <span id="x-complex-integration-home-badge"
+                        class="notification-badge">4</span>
+                </div>
+              </a>
+              <a id="x-complex-integration-explore"
+                 href="/explore"
+                 style="display:flex;width:220px;height:44px">
+                <span id="x-complex-integration-explore-label">Explore</span>
+              </a>
+              <a id="x-complex-integration-notifications"
+                 href="/notifications"
+                 style="display:flex;width:220px;height:44px">
+                <span id="x-complex-integration-notifications-label">
+                  <span>Notifications</span>
+                </span>
+                <span class="notification-badge">8</span>
+              </a>
+              <a id="x-complex-integration-messages"
+                 href="/messages"
+                 style="display:flex;width:220px;height:44px">
+                <span id="x-complex-integration-messages-label">Messages</span>
+              </a>
+            </header>
+            <main style="display:block;width:720px;height:660px">
+              <article>
+                <div id="x-complex-integration-post"
+                     data-testid="tweetText"
+                     lang="en"
+                     dir="auto">
+                  Existing timeline content keeps the authenticated shell active.
+                </div>
+              </article>
+            </main>
+          </div>
+        `;
+
+        const homeControl = document.querySelector('#x-complex-integration-home');
+        const homeLabel = document.querySelector('#x-complex-integration-home-label');
+        const homeBadge = document.querySelector('#x-complex-integration-home-badge');
+        const originalHref = homeControl.getAttribute('href');
+        let clickCount = 0;
+        homeControl.addEventListener('click', event => {
+          event.preventDefault();
+          clickCount++;
+        });
+        state.config = {
+          showOriginal: true,
+          autoDetect: false,
+          targetLang: 'zh-CN',
+          maxConcurrent: 4,
+          translationScope: 'smart'
+        };
+        state.scope = 'smart';
+        state.isActive = true;
+        state.shouldStop = false;
+        state.lifecycle.start();
+        state.scanContext = pageScanner.createScanContext({
+          scope: 'smart',
+          site: 'x'
+        });
+        chrome.runtime.sendMessage = async message => {
+          if (message.action === 'abortRequest') return { success: true };
+          if (message.action !== 'translate') return { translations: [] };
+          requests.push(message);
+          return { translations: message.texts.map(pseudoTranslate) };
+        };
+
+        try {
+          startMutationObserver();
+          collectViewportBlocks().forEach(block => addToQueue(block));
+          await processQueue();
+          assert(await waitFor(() => homeLabel.querySelector(':scope > .oit-translation')),
+            `complex Home label was not translated; `
+              + `dynamic=${JSON.stringify(state.dynamicDiagnostics)}`);
+          assert(homeLabel.textContent.includes('Home')
+              && homeLabel.textContent.includes('timeline'),
+          'complex Home label translation omitted a natural-language span');
+          assert(homeBadge.textContent === '4'
+              && !homeBadge.querySelector('.oit-translation'),
+          'complex Home translation modified its numeric badge');
+          assert(!document.querySelector('#x-complex-integration-home-status')
+            ?.querySelector('.oit-translation'),
+          'complex Home translation modified its status node');
+
+          homeLabel.replaceChildren();
+          const replacement = document.createElement('span');
+          replacement.id = 'x-complex-integration-home-label-content';
+          replacement.append(
+            Object.assign(document.createElement('span'), { textContent: 'Start' }),
+            Object.assign(document.createElement('span'), { textContent: 'here' })
+          );
+          homeLabel.append(replacement);
+
+          assert(await waitFor(() => {
+            const translation = homeLabel.querySelector(':scope > .oit-translation');
+            return translation?.textContent.includes('译Start')
+              && translation.textContent.includes('译here');
+          }), `React-style complex label replacement was not retranslated; `
+            + `dynamic=${JSON.stringify(state.dynamicDiagnostics)}`);
+          assert(homeLabel.querySelectorAll(':scope > .oit-translation').length === 1,
+            'React-style label replacement left duplicate translations');
+          assert(document.querySelector('#x-complex-integration-home') === homeControl,
+            'React-style label replacement detached the anchor');
+          assert(homeControl.getAttribute('href') === originalHref,
+            'React-style label replacement changed the anchor href');
+          assert(document.querySelector('#x-complex-integration-home-badge') === homeBadge,
+            'React-style label replacement replaced the badge');
+          homeControl.click();
+          assert(clickCount === 1,
+            'React-style label replacement removed the control click listener');
+          assert(requests.some(request => request.texts.some(text => (
+            text.includes('Home') && text.includes('timeline')
+          ))), 'complex natural-language label never reached the provider');
+          assert(await waitFor(() => isTranslationPipelineIdle()),
+            'complex label retranslation left the pipeline busy');
+          assert(settleTranslationPipeline(),
+            'complex label retranslation did not settle the existing session');
+        } finally {
+          chrome.runtime.sendMessage = originalSendMessage;
+          removeAllTranslations();
+          state.fullReset();
+        }
+      });
+
+      test('selection requests omit page context and reject out-of-scope translations', async () => {
+        resetContentState();
+        const originalSendMessage = chrome.runtime.sendMessage;
+        const selectionRequests = [];
+        let selectedTranslation = pseudoTranslate('Selected sentence.');
+        document.title = 'Private page title';
+        document.body.innerHTML = `
+          <main><article>
+            <h2>Private surrounding heading</h2>
+            <p>Private surrounding paragraph that must not reach selection translation.</p>
+          </article></main>
+        `;
+        chrome.runtime.sendMessage = async message => {
+          if (message.action !== 'translate') return { translations: [] };
+          selectionRequests.push(message);
+          return { translations: [selectedTranslation] };
+        };
+
+        try {
+          await showTranslationPanel('Selected sentence.', 20, 20);
+          assert(floatingPanel?.querySelector('.oit-panel-translation')?.textContent
+            === selectedTranslation,
+          'valid selection translation was not rendered');
+
+          const request = selectionRequests[0];
+          assert(request.context.scene === 'selection',
+            'selection translation request did not use the selection scene');
+          assert(!('title' in request.context)
+            && !('surroundingText' in request.context)
+            && !('itemContexts' in request.context),
+          'selection translation request leaked page context');
+
+          selectedTranslation = 'x'.repeat(300);
+          await showTranslationPanel('Selected sentence.', 20, 20);
+          assert(floatingPanel?.querySelector('.oit-panel-error')?.textContent
+            .includes('exceeded the requested scope'),
+          'out-of-scope selection translation was not rejected');
+        } finally {
+          chrome.runtime.sendMessage = originalSendMessage;
+          floatingPanel?.remove();
+          floatingPanel = null;
+          resetContentState();
+        }
+      });
+
+      test('removing translations never overwrites a title changed by the user', async () => {
+        resetContentState();
+        const originalSendMessage = chrome.runtime.sendMessage;
+        document.title = 'Original browser title';
+        state.config = {
+          showOriginal: true,
+          autoDetect: false,
+          targetLang: 'en'
+        };
+        state.isActive = true;
+        state.shouldStop = false;
+        chrome.runtime.sendMessage = async message => {
+          if (message.action === 'translate') {
+            return { translations: [pseudoTranslate(message.texts[0])] };
+          }
+          return { translations: [] };
+        };
+
+        try {
+          await translateDocumentTitle();
+          document.title = 'Title chosen by the user';
+          assert(!restoreDocumentTitle(), 'restore claimed ownership of a user-changed title');
+          assert(document.title === 'Title chosen by the user',
+            'restore overwrote a title changed by the user');
+        } finally {
+          chrome.runtime.sendMessage = originalSendMessage;
+          state.isActive = false;
+          state.shouldStop = false;
+        }
+      });
+
+      test('a hung runtime request times out, releases pipeline state, and permits a clean retry', async () => {
+        resetContentState();
+        const originalSendMessage = chrome.runtime.sendMessage;
+        const originalRuntimeTimeout = CONFIG.RUNTIME_REQUEST_TIMEOUT;
+        const abortRequests = [];
+        let hungRequestCount = 0;
+        let providerAvailable = false;
+        const previousFab = fab;
+        document.title = 'Hung runtime request regression';
+        document.body.innerHTML = `
+          <main><article>
+            <p id="hung-runtime-host">
+              A permanently pending runtime response must not leave the page spinner active forever.
+            </p>
+          </article></main>
+        `;
+
+        state.config = {
+          showOriginal: true,
+          autoDetect: false,
+          targetLang: 'en',
+          maxConcurrent: 1,
+          translationScope: 'smart'
+        };
+        CONFIG.RUNTIME_REQUEST_TIMEOUT = 40;
+        hideFAB();
+        createFAB({ right: 20, top: 120 });
+
+        chrome.runtime.sendMessage = message => {
+          if (message.action === 'abortRequest') {
+            abortRequests.push(message.requestId);
+            return Promise.resolve({ success: true });
+          }
+          if (message.action === 'translate') {
+            if (!providerAvailable) {
+              hungRequestCount++;
+              return new Promise(() => {});
+            }
+            return Promise.resolve({
+              translations: message.texts.map(pseudoTranslate)
+            });
+          }
+          return Promise.resolve({ success: true });
+        };
+
+        const waitFor = async (predicate, timeout = 1500) => {
+          const deadline = performance.now() + timeout;
+          while (performance.now() < deadline) {
+            if (predicate()) return true;
+            await sleep(20);
+          }
+          return predicate();
+        };
+
+        try {
+          startTranslation(state.config);
+          assert(hungRequestCount > 0, 'page translation never sent a runtime request');
+          assert(fab?.querySelector('.oit-fab-btn')?.classList.contains('translating'),
+            'started translation did not set the FAB busy state');
+
+          const settled = await waitFor(() => (
+            state.pipelineSettled
+            && state.translationQueue.length === 0
+            && state.activeTranslations === 0
+            && state.pendingElements.size === 0
+            && state.translatingElements.size === 0
+            && state.inflightRequests.size === 0
+            && state.translationTasks.size === 0
+          ));
+          assert(settled,
+            'hung runtime request left queue, inflight, task, or pending state behind');
+          assert(abortRequests.length > 0,
+            'timed-out page request was not explicitly aborted in the service worker');
+          assert(!isTranslationPipelineBusy(),
+            'hung runtime request left the translation pipeline busy');
+          assert(!fab?.querySelector('.oit-fab-btn')?.classList.contains('translating'),
+            'hung runtime request left the FAB spinner active');
+
+          providerAvailable = true;
+          startTranslation(state.config);
+          const translated = await waitFor(() => (
+            translationRecords.has(document.querySelector('#hung-runtime-host'))
+          ));
+          assert(translated,
+            'a settled active session did not restart and translate the same block');
+          const recoveredHost = document.querySelector('#hung-runtime-host');
+          const recoveredRecord = translationRecords.get(recoveredHost);
+          assert(recoveredHost.querySelector(':scope > .oit-translation'),
+            `clean retry rendered ${recoveredRecord?.kind || 'no record'} instead of `
+              + `an in-place bilingual translation: ${recoveredHost.outerHTML}`);
+          const recovered = await waitFor(() => isTranslationPipelineIdle());
+          assert(recovered, 'recovered translation pipeline did not become idle');
+          assert(settleTranslationPipeline(),
+            'recovered translation pipeline did not settle');
+        } finally {
+          chrome.runtime.sendMessage = originalSendMessage;
+          CONFIG.RUNTIME_REQUEST_TIMEOUT = originalRuntimeTimeout;
+          removeAllTranslations();
+          hideFAB();
+          state.fullReset();
+          if (previousFab?.isConnected) fab = previousFab;
+        }
+      });
+
+      test('title and selection requests time out, abort, and leave no spinner state', async () => {
+        resetContentState();
+        const originalSendMessage = chrome.runtime.sendMessage;
+        const originalRuntimeTimeout = CONFIG.RUNTIME_REQUEST_TIMEOUT;
+        const hungRequestIds = [];
+        const abortRequestIds = [];
+        document.title = 'Hung title and selection regression';
+        document.body.innerHTML = '<p>Selection timeout regression content.</p>';
+        state.config = {
+          provider: 'google',
+          showOriginal: true,
+          autoDetect: false,
+          targetLang: 'en'
+        };
+        state.isActive = true;
+        state.shouldStop = false;
+        CONFIG.RUNTIME_REQUEST_TIMEOUT = 40;
+        chrome.runtime.sendMessage = message => {
+          if (message.action === 'translate') {
+            hungRequestIds.push(message.requestId);
+            return new Promise(() => {});
+          }
+          if (message.action === 'abortRequest') {
+            abortRequestIds.push(message.requestId);
+            return Promise.resolve({ success: true });
+          }
+          return Promise.resolve({ success: true });
+        };
+
+        try {
+          await translateDocumentTitle().catch(() => {});
+          assert(titleInflightRequestId === null,
+            'timed-out document title request remained in flight');
+
+          await showTranslationPanel('Selected timeout text.', 20, 20);
+          assert(floatingPanel?.querySelector('.oit-panel-error')?.textContent
+            .includes('timed out'),
+          'timed-out selection request left the panel spinner active');
+          assert(selectionInflightRequest === null,
+            'timed-out selection request remained in flight');
+          assert(hungRequestIds.length >= 2,
+            'title and selection timeout paths did not both issue requests');
+          assert(hungRequestIds.every(requestId => abortRequestIds.includes(requestId)),
+            'timed-out title or selection request was not explicitly aborted');
+        } finally {
+          chrome.runtime.sendMessage = originalSendMessage;
+          CONFIG.RUNTIME_REQUEST_TIMEOUT = originalRuntimeTimeout;
+          hideFloating();
+          resetContentState();
+        }
+      });
+
+      test('an in-flight response cannot overwrite source changed after request start', async () => {
+        resetContentState();
+        const originalSendMessage = chrome.runtime.sendMessage;
+        const originalText = 'The initial plain text document was replaced while translating.';
+        const freshText = 'Fresh source text must own the final rendered translation.';
+        let translateRequestCount = 0;
+        let resolveInitialRequest = null;
+        let markInitialRequestStarted;
+        const initialRequestStarted = new Promise(resolve => {
+          markInitialRequestStarted = resolve;
+        });
+
+        document.title = 'In-flight source replacement';
+        document.body.innerHTML = `<pre id="racing-plain-text">${originalText}</pre>`;
+        state.config = {
+          showOriginal: true,
+          autoDetect: false,
+          targetLang: 'zh-CN',
+          maxConcurrent: 2,
+          translationScope: 'full'
+        };
+        state.scope = 'full';
+        state.isActive = true;
+        state.shouldStop = false;
+        state.lifecycle.start();
+        state.scanContext = pageScanner.createScanContext({ scope: 'full' });
+
+        chrome.runtime.sendMessage = message => {
+          if (message.action === 'abortRequest') return Promise.resolve({ success: true });
+          if (message.action !== 'translate') return Promise.resolve({ translations: [] });
+          translateRequestCount++;
+          if (translateRequestCount > 1) {
+            return Promise.resolve({
+              translations: message.texts.map(pseudoTranslate)
+            });
+          }
+          return new Promise(resolve => {
+            resolveInitialRequest = resolve;
+            markInitialRequestStarted();
+          });
+        };
+
+        try {
+          const host = document.querySelector('#racing-plain-text');
+          const staleBlock = prepareTranslationBlock(host, { kind: 'plain-text' });
+          assert(staleBlock, 'plain text source was not prepared for translation');
+          const staleTask = translateBatch([staleBlock]);
+          await initialRequestStarted;
+
+          host.textContent = freshText;
+          invalidateTranslationSource(host);
+          resolveInitialRequest({
+            translations: [pseudoTranslate(originalText)]
+          });
+          await staleTask;
+
+          assert(host.textContent === freshText,
+            'a stale in-flight response overwrote the replacement source text');
+          assert(!host.nextElementSibling?.classList.contains('oit-translation'),
+            'a stale in-flight response rendered beside the replacement source text');
+
+          const freshBlock = prepareTranslationBlock(host, { kind: 'plain-text' });
+          assert(freshBlock, 'replacement source text could not be prepared for retranslation');
+          await translateBatch([freshBlock]);
+          assert(host.nextElementSibling?.textContent.includes('Fresh'),
+            'replacement source text was not translated after the stale response settled');
+        } finally {
+          chrome.runtime.sendMessage = originalSendMessage;
+          removeAllTranslations();
+          state.fullReset();
+        }
+      });
+
+      test('extension-owned translations do not feed the dynamic observer loop', async () => {
+        resetContentState();
+        const originalSendMessage = chrome.runtime.sendMessage;
+        const requests = [];
+        const waitFor = async (predicate, timeout = 1500) => {
+          const deadline = performance.now() + timeout;
+          while (performance.now() < deadline) {
+            if (predicate()) return true;
+            await sleep(20);
+          }
+          return predicate();
+        };
+
+        document.title = 'Observer loop regression';
+        document.body.innerHTML = `
+          <div style="display:flex;width:900px;height:600px">
+            <nav id="stable-navigation" style="display:block;width:220px;height:300px">
+              <a href="/home"
+                 style="display:block;width:200px;height:36px">
+                <span id="stable-navigation-label">Home timeline</span>
+              </a>
+              <a href="/explore"
+                 style="display:block;width:200px;height:36px">
+                <span>Explore trends</span>
+              </a>
+            </nav>
+            <main><article>
+              <p id="stable-article">A stable article should translate exactly once.</p>
+            </article></main>
+          </div>
+        `;
+        state.config = {
+          showOriginal: false,
+          autoDetect: false,
+          targetLang: 'zh-CN',
+          maxConcurrent: 4,
+          translationScope: 'smart'
+        };
+        state.scope = 'smart';
+        state.isActive = true;
+        state.shouldStop = false;
+        state.lifecycle.start();
+        state.scanContext = pageScanner.createScanContext({ scope: 'smart' });
+        chrome.runtime.sendMessage = message => {
+          if (message.action === 'abortRequest') return Promise.resolve({ success: true });
+          if (message.action !== 'translate') return Promise.resolve({ translations: [] });
+          requests.push(message);
+          return Promise.resolve({
+            translations: message.texts.map(pseudoTranslate)
+          });
+        };
+
+        try {
+          collectViewportBlocks().forEach(block => addToQueue(block));
+          await processQueue();
+          assert(await waitFor(() => translationRecords.size > 0
+              && isTranslationPipelineIdle()),
+          'initial translations did not settle before observer-loop measurement');
+
+          const requestCount = requests.length;
+          const recordCount = translationRecords.size;
+          await sleep(CONFIG.MUTATION_DEBOUNCE + 350);
+
+          assert(requests.length === requestCount,
+            'extension-owned DOM mutations issued duplicate translation requests');
+          assert(translationRecords.size === recordCount,
+            'extension-owned DOM mutations created duplicate translation records');
+          assert(state.pendingDynamicRoots.size === 0,
+            'extension-owned DOM mutations scheduled a dynamic rescan');
+          assert(state.dynamicDiagnostics.mutationBatches === 0,
+            `extension-owned DOM mutations entered the dynamic pipeline: `
+              + `${JSON.stringify(state.dynamicDiagnostics)}`);
+          assert(settleTranslationPipeline(),
+            'observer-loop regression left the translation pipeline unsettled');
+        } finally {
+          chrome.runtime.sendMessage = originalSendMessage;
+          removeAllTranslations();
+          state.fullReset();
+        }
+      });
+
+      test('adjacent prose batches together while adjacent controls stay independent', () => {
+        resetContentState();
+        document.body.innerHTML = `
+          <main id="prose-container">
+            <p id="prose-a">The first sentence introduces the same topic.</p>
+            <p id="prose-b">The second sentence continues that topic.</p>
+          </main>
+        `;
+        state.config = {
+          showOriginal: true,
+          autoDetect: false,
+          targetLang: 'en'
+        };
+        const first = prepareTranslationBlock(document.querySelector('#prose-a'), {
+          role: 'paragraph',
+          container: document.querySelector('#prose-container'),
+          headingTrail: [],
+          order: 0
+        });
+        const second = prepareTranslationBlock(document.querySelector('#prose-b'), {
+          role: 'paragraph',
+          container: document.querySelector('#prose-container'),
+          headingTrail: [],
+          order: 1
+        });
+        state.translationQueue.enqueue(first, 100);
+        state.translationQueue.enqueue(second, 90);
+        const proseBatch = dequeueBatch();
+        assert(proseBatch?.length === 2, 'adjacent prose paragraphs were not merged');
+        removePendingMark(first.element);
+        removePendingMark(second.element);
+        state.translationQueue.clear();
+
+        document.body.innerHTML = `
+          <div id="control-container">
+            <button id="control-a">Save changes</button>
+            <button id="control-b">Cancel changes</button>
+          </div>
+        `;
+        const controlA = prepareTranslationBlock(document.querySelector('#control-a'), {
+          role: 'control',
+          container: document.querySelector('#control-container'),
+          headingTrail: [],
+          order: 0
+        });
+        const controlB = prepareTranslationBlock(document.querySelector('#control-b'), {
+          role: 'control',
+          container: document.querySelector('#control-container'),
+          headingTrail: [],
+          order: 1
+        });
+        state.translationQueue.enqueue(controlA, 100);
+        state.translationQueue.enqueue(controlB, 90);
+        const controlBatch = dequeueBatch();
+        assert(controlBatch?.length === 1, 'adjacent controls were incorrectly merged');
+        removePendingMark(controlA.element);
+        removePendingMark(controlB.element);
+        state.translationQueue.clear();
+      });
+
+      const failures = [];
+      for (const item of tests) {
+        try {
+          await item.fn();
+        } catch (error) {
+          failures.push({ name: item.name, error: error.stack || error.message });
+        }
+      }
+      return { total: tests.length, failures };
+    };
+  </script>
+</body>
+</html>

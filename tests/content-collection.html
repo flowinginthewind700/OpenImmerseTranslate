@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Content collection browser tests</title>
+  <style>
+    body { margin: 0; font: 16px/1.5 sans-serif; }
+    p, span { display: block; min-height: 24px; }
+  </style>
+</head>
+<body>
+  <p id="same-a">Same text.</p>
+  <div><span id="same-b">Same text.</span></div>
+
+  <script>
+    window.chrome = {
+      runtime: {
+        id: 'test-extension',
+        onMessage: { addListener() {} },
+        sendMessage() { return Promise.resolve({ translations: [] }); }
+      },
+      storage: {
+        sync: { get() { return Promise.resolve({}); } },
+        local: { get() { return Promise.resolve({}); }, set() { return Promise.resolve(); } }
+      }
+    };
+  </script>
+  <script src="../shared/content-signals.js"></script>
+  <script src="../shared/content-unitizer.js"></script>
+  <script src="../shared/content-unit-classifier.js"></script>
+  <script src="../shared/content-ui-policy.js"></script>
+  <script src="../shared/content-filter.js"></script>
+  <script src="../shared/content-root-detector.js"></script>
+  <script src="../shared/site-profiles/x.js"></script>
+  <script src="../shared/content-site-adapters.js"></script>
+  <script src="../shared/prompt-policy.js"></script>
+  <script src="../shared/translation-core.js"></script>
+  <script src="../shared/translation-source-state.js"></script>
+  <script src="../shared/page-scanner.js"></script>
+  <script src="../shared/translation-retry-policy.js"></script>
+  <script src="../shared/translation-session.js"></script>
+  <script src="../shared/translation-scheduler.js"></script>
+  <script src="../shared/request-timeout.js"></script>
+  <script src="../shared/providers.js"></script>
+  <script src="../content/content.js"></script>
+  <script>
+    window.runCollectionTests = () => {
+      const blocks = collectViewportBlocks();
+      const ids = blocks.map(block => block.element.id);
+      const failures = [];
+
+      if (!ids.includes('same-a') || !ids.includes('same-b')) {
+        failures.push({
+          name: 'identical text on different elements is not text-deduplicated',
+          error: `collected ids: ${ids.join(', ')}`
+        });
+      }
+
+      const duplicate = blocks.filter(block => block.element.id === 'same-a');
+      if (duplicate.length !== 1) {
+        failures.push({
+          name: 'the same element is not collected twice',
+          error: `same-a count: ${duplicate.length}`
+        });
+      }
+
+      const linked = blocks.find(block => block.element.id === 'same-a');
+      if (!linked?.template || linked.text !== linked.template.text) {
+        failures.push({
+          name: 'collection records the protected source template',
+          error: 'missing template on collected block'
+        });
+      }
+
+      return { total: 3, failures };
+    };
+  </script>
+</body>
+</html>

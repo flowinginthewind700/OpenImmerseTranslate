@@ -1,0 +1,1972 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>X/Twitter content scanner tests</title>
+  <style>
+    body { margin: 0; font: 16px/1.5 sans-serif; }
+    main, article, article > div, article div[lang], li { display: block; }
+    article { width: 600px; min-height: 100px; }
+    article div[lang] { width: 560px; min-height: 28px; }
+    #x-auth-shell { display: flex; gap: 24px; align-items: flex-start; }
+    #x-sidebar { display: block; width: 230px; min-height: 560px; }
+    #x-sidebar a { display: flex; width: 210px; min-height: 34px; align-items: center; }
+  </style>
+</head>
+<body>
+  <div id="x-auth-shell">
+    <div id="x-sidebar">
+      <a id="x-sidebar-home-control" href="/home">
+        <svg aria-hidden="true" width="18" height="18"><path d="M0 0h12v12z"></path></svg>
+        <span id="x-sidebar-home-label">Home</span>
+        <span id="x-sidebar-home-badge">4</span>
+      </a>
+      <a id="x-sidebar-explore-control" href="/explore">
+        <span id="x-sidebar-explore-label">Explore</span>
+      </a>
+      <a id="x-sidebar-notifications-control" href="/notifications">
+        <span id="x-sidebar-notifications-label">Notifications</span>
+      </a>
+      <a id="x-sidebar-messages-control" href="/messages">
+        <span id="x-sidebar-messages-label">Messages</span>
+      </a>
+      <a id="x-sidebar-grok-control" href="/i/grok">
+        <span id="x-sidebar-grok-label">Grok</span>
+      </a>
+      <a id="x-sidebar-bookmarks-control" href="/i/bookmarks">
+        <span id="x-sidebar-bookmarks-label">Bookmarks</span>
+      </a>
+      <a id="x-sidebar-jobs-control" href="/jobs">
+        <span id="x-sidebar-jobs-label">Jobs</span>
+      </a>
+      <a id="x-sidebar-communities-control" href="/i/communities">
+        <span id="x-sidebar-communities-label">Communities</span>
+      </a>
+      <a id="x-sidebar-premium-control" href="/i/premium">
+        <span id="x-sidebar-premium-label">Premium</span>
+      </a>
+      <a id="x-sidebar-verified-control" href="/i/verified-orgs">
+        <span id="x-sidebar-verified-label">Verified Orgs</span>
+      </a>
+    </div>
+  <main id="x-main">
+    <div id="timeline">
+      <ol>
+        <li>
+          <article id="tweet-one">
+            <div>
+              <div data-post-avatar="true"><a href="/alice">Alice</a></div>
+              <div>
+                <a href="/alice">Alice</a>
+                <a href="/alice"><span>@alice</span></a>
+                <a href="/alice/status/1">2h</a>
+                <div id="tweet-one-text" data-testid="tweetText" lang="en" dir="auto">
+                  Shipping a faster translation pipeline today.
+                  <a href="/search?q=%23browser">#browser</a>
+                  <a href="/bob">@bob</a>
+                </div>
+                <div data-engagement-action="reply" role="group">
+                  <span>12 replies</span>
+                  <span>48 likes</span>
+                </div>
+              </div>
+            </div>
+          </article>
+        </li>
+        <li>
+          <article id="tweet-two">
+            <div>
+              <div data-post-avatar="true"><a href="/carol">Carol</a></div>
+              <div>
+                <a href="/carol">Carol</a>
+                <a href="/carol"><span>@carol</span></a>
+                <a href="/carol/status/2">3h</a>
+                <div id="tweet-two-text" class="whitespace-pre-wrap" lang="es" dir="auto">
+                  La traduccion conserva el contexto y los enlaces.
+                </div>
+                <div data-engagement-action="reply" role="group">
+                  <span>8 replies</span>
+                  <span>31 likes</span>
+                </div>
+              </div>
+            </div>
+          </article>
+        </li>
+        <li>
+          <article id="tweet-quote">
+            <div>
+              <div data-post-avatar="true"><a href="/dave">Dave</a></div>
+              <div>
+                <a href="/dave">Dave</a>
+                <a href="/dave"><span>@dave</span></a>
+                <a href="/dave/status/3">4h</a>
+                <div id="tweet-quote-text" data-testid="tweetText" lang="en" dir="auto">
+                  This is the comment I am adding.
+                </div>
+                <div id="quoted-post">
+                  <a href="/erin">Erin</a>
+                  <div id="quoted-post-text" data-testid="tweetText" lang="en" dir="auto">
+                    This is the quoted source post.
+                  </div>
+                </div>
+                <div data-engagement-action="reply" role="group">
+                  <span>5 replies</span>
+                  <span>19 likes</span>
+                </div>
+              </div>
+            </div>
+          </article>
+        </li>
+      </ol>
+    </div>
+  </main>
+  </div>
+
+  <script src="../shared/content-signals.js"></script>
+  <script src="../shared/content-unitizer.js"></script>
+  <script src="../shared/content-unit-classifier.js"></script>
+  <script src="../shared/content-ui-policy.js"></script>
+  <script src="../shared/content-filter.js"></script>
+  <script src="../shared/content-root-detector.js"></script>
+  <script src="../shared/site-profiles/x.js"></script>
+  <script src="../shared/content-site-adapters.js"></script>
+  <script src="../shared/prompt-policy.js"></script>
+  <script src="../shared/translation-core.js"></script>
+  <script src="../shared/page-scanner.js"></script>
+  <script>
+    window.runXTwitterContentTests = () => {
+      const scanner = window.OITPageScanner;
+      const translationCore = window.OITTranslationCore;
+      const tests = [];
+      const assert = (condition, message) => {
+        if (!condition) throw new Error(message);
+      };
+      const test = (name, fn) => tests.push({ name, fn });
+      const pseudoTranslate = source => source
+        .split(/(\[\[OIT-[A-Z0-9]+:(?:OPEN|CLOSE|ATOM):\d+\]\])/g)
+        .map((part, index) => index % 2 === 1
+          ? part
+          : part.replace(/[A-Za-z]+/g, match => `译${match}`))
+        .join('');
+      const bodyIds = candidates => candidates
+        .map(candidate => candidate.element.id)
+        .filter(id => /-text$/.test(id));
+
+      test('current X post bodies are independent translation units', () => {
+        const context = scanner.createScanContext({ scope: 'smart' });
+        const candidates = scanner.collectPageCandidates('smart', { context });
+        const ids = bodyIds(candidates);
+
+        for (const expected of [
+          'tweet-one-text',
+          'tweet-two-text',
+          'tweet-quote-text',
+          'quoted-post-text'
+        ]) {
+          assert(ids.includes(expected), `missing X post body ${expected}: ${ids.join(', ')}`);
+        }
+        assert(!candidates.some(candidate => candidate.element.id === 'tweet-one'),
+          'native article container was emitted instead of its post body');
+        assert(!candidates.some(candidate => candidate.element.matches('li')),
+          'timeline list item was emitted instead of its post body');
+
+        const first = candidates.find(candidate => candidate.element.id === 'tweet-one-text');
+        assert(first.text.includes('Shipping a faster translation pipeline'),
+          'post body text was lost');
+        assert(!first.text.includes('12 replies') && !first.text.includes('48 likes'),
+          'engagement metadata leaked into the post body unit');
+      });
+
+      test('smart X scope discovers independent post islands outside the selected reading root', () => {
+        document.body.insertAdjacentHTML('beforeend', `
+          <main id="x-independent-island"
+                style="display:block;width:620px;min-height:120px">
+            <article id="x-independent-island-post">
+              <div data-testid="tweetText"
+                   id="x-independent-island-text"
+                   lang="en"
+                   dir="auto">
+                A later X content island remains discoverable beside the primary feed.
+              </div>
+            </article>
+          </main>
+        `);
+
+        try {
+          const context = scanner.createScanContext({ scope: 'smart', site: 'x' });
+          const candidates = scanner.collectPageCandidates('smart', {
+            context,
+            site: 'x'
+          });
+          const ids = candidates.map(candidate => candidate.element.id).filter(Boolean);
+
+          assert(ids.includes('x-independent-island-text'),
+            `independent X post island was omitted: ${ids.join(', ')}`);
+        } finally {
+          document.querySelector('#x-independent-island')?.remove();
+        }
+      });
+
+      test('X account metadata is protected before broad fallback selectors', () => {
+        document.querySelector('#timeline ol').insertAdjacentHTML('beforeend', `
+          <li>
+            <article id="tweet-metadata-variants">
+              <div data-testid="User-Name" id="x-user-name-legacy">
+                <div id="x-user-name-legacy-nested" lang="en" dir="auto">
+                  Legacy display name
+                </div>
+              </div>
+              <div data-testid="UserName" id="x-user-name-variant">
+                <div id="x-user-name-variant-nested" lang="en" dir="auto">
+                  Variant display name
+                </div>
+              </div>
+              <div data-testid="UserDescription" id="x-user-description">
+                <div id="x-user-description-nested" lang="en" dir="auto">
+                  Account biography must not become a post body.
+                </div>
+              </div>
+              <div data-testid="tweetText" id="x-metadata-real-body" lang="en" dir="auto">
+                Only this stable post-text node is translatable.
+              </div>
+            </article>
+          </li>
+        `);
+
+        const context = scanner.createScanContext({ scope: 'smart', site: 'x' });
+        const candidates = scanner.collectPageCandidates('smart', {
+          context,
+          site: 'x'
+        });
+        const ids = candidates.map(candidate => candidate.element.id).filter(Boolean);
+
+        assert(ids.includes('x-metadata-real-body'),
+          `stable X post body was omitted: ${ids.join(', ')}`);
+        for (const excluded of [
+          'x-user-name-legacy-nested',
+          'x-user-name-variant-nested',
+          'x-user-description-nested'
+        ]) {
+          assert(!ids.includes(excluded),
+            `X metadata fallback was selected as a post body: ${excluded}`);
+        }
+      });
+
+      test('dynamically inserted X posts use the same post-body policy', () => {
+        const context = scanner.createScanContext({ scope: 'smart' });
+        scanner.collectPageCandidates('smart', { context });
+
+        const list = document.querySelector('#timeline ol');
+        const item = document.createElement('li');
+        item.innerHTML = `
+          <article id="tweet-dynamic">
+            <div>
+              <div data-post-avatar="true"><a href="/frank">Frank</a></div>
+              <div>
+                <a href="/frank">Frank</a>
+                <div id="tweet-dynamic-text" data-testid="tweetText" lang="en" dir="auto">
+                  A newly inserted post is translated without refreshing the page.
+                </div>
+              </div>
+            </div>
+          </article>
+        `;
+        list.append(item);
+
+        const candidates = scanner.collectDynamicCandidates(
+          document.querySelector('#tweet-dynamic'),
+          'smart',
+          { context }
+        );
+        assert(bodyIds(candidates).includes('tweet-dynamic-text'),
+          'dynamic X post body was not discovered');
+      });
+
+      test('dynamic X feed islands can contain multiple post articles', () => {
+        const wrapper = document.createElement('div');
+        wrapper.id = 'x-dynamic-feed-island';
+        wrapper.hidden = true;
+        wrapper.innerHTML = `
+          <main id="x-dynamic-feed-main"
+                style="display:block;width:620px;min-height:180px">
+            <article id="x-dynamic-feed-post-one">
+              <div data-testid="tweetText"
+                   id="x-dynamic-feed-first-text"
+                   lang="en"
+                   dir="auto">
+                The first post in a dynamic feed island is translated.
+              </div>
+            </article>
+            <article id="x-dynamic-feed-post-two">
+              <div data-testid="tweetText"
+                   id="x-dynamic-feed-second-text"
+                   lang="en"
+                   dir="auto">
+                The second post in the same dynamic island is translated too.
+              </div>
+            </article>
+          </main>
+        `;
+        document.body.append(wrapper);
+
+        try {
+          const context = scanner.createScanContext({ scope: 'smart', site: 'x' });
+          scanner.collectPageCandidates('smart', { context, site: 'x' });
+
+          wrapper.hidden = false;
+          const ids = scanner.collectDynamicCandidates(wrapper, 'smart', {
+            context,
+            site: 'x'
+          }).map(candidate => candidate.element.id).filter(Boolean);
+
+          for (const expected of [
+            'x-dynamic-feed-first-text',
+            'x-dynamic-feed-second-text'
+          ]) {
+            assert(ids.includes(expected),
+              `multi-post dynamic X island omitted ${expected}: ${ids.join(', ')}`);
+          }
+        } finally {
+          wrapper.remove();
+        }
+      });
+
+      test('dynamic X posts survive opaque virtualized timeline wrappers', () => {
+        const context = scanner.createScanContext({ scope: 'smart', site: 'x' });
+        scanner.collectPageCandidates('smart', { context, site: 'x' });
+
+        const wrapper = document.createElement('x-timeline-cell');
+        wrapper.id = 'x-virtualized-cell';
+        wrapper.innerHTML = `
+          <article id="x-virtualized-post">
+            <div data-testid="tweetText"
+                 id="x-virtualized-post-text"
+                 lang="en"
+                 dir="auto">
+              A newly virtualized post must remain translatable after scrolling.
+            </div>
+          </article>
+        `;
+        document.body.append(wrapper);
+
+        try {
+          const candidates = scanner.collectDynamicCandidates(wrapper, 'smart', {
+            context,
+            site: 'x'
+          });
+          const post = candidates.find(candidate => (
+            candidate.element.id === 'x-virtualized-post-text'
+          ));
+
+          assert(post, 'opaque dynamic X wrapper discarded its nested post body');
+          assert(post.siteRole === 'post-body',
+            `dynamic X post lost post-body semantics: ${post.siteRole}`);
+        } finally {
+          wrapper.remove();
+        }
+      });
+
+      test('smart X scope translates navigation while protecting account, badges, time, and engagement metadata', () => {
+        document.body.insertAdjacentHTML('afterbegin', `
+          <header id="x-header">
+            <nav id="x-primary-nav" aria-label="Primary">
+              <a id="x-home-control" href="/home">
+                <svg aria-hidden="true"><path d="M0 0h12v12z"></path></svg>
+                <div id="x-home-content">
+                  <span id="x-home-label">Home</span>
+                  <span id="x-home-badge">4</span>
+                </div>
+              </a>
+              <a id="x-explore-control" href="/explore">
+                <span id="x-explore-label">Explore</span>
+              </a>
+              <a id="x-notifications-control" href="/notifications">
+                <span id="x-notifications-label">Notifications</span>
+              </a>
+              <a id="x-messages-control" href="/messages">
+                <span id="x-messages-label">Messages</span>
+              </a>
+            </nav>
+          </header>
+        `);
+        const firstPost = document.querySelector('#tweet-one');
+        firstPost.insertAdjacentHTML('afterbegin', `
+          <div data-testid="User-Name" id="x-account">
+            <span id="x-display-name">Alice Example</span>
+            <span id="x-handle">@alice</span>
+          </div>
+          <time id="x-timestamp" datetime="2026-11-19T00:00:00Z">2h</time>
+        `);
+
+        const context = scanner.createScanContext({ scope: 'smart' });
+        const candidates = scanner.collectPageCandidates('smart', { context });
+        const ids = candidates.map(candidate => candidate.element.id).filter(Boolean);
+
+        for (const expected of [
+          'x-home-label',
+          'x-explore-label',
+          'x-notifications-label',
+          'x-messages-label',
+          'tweet-one-text'
+        ]) {
+          assert(ids.includes(expected), `smart X scope omitted ${expected}: ${ids.join(', ')}`);
+        }
+        for (const excluded of [
+          'x-home-badge',
+          'x-home-control',
+          'x-account',
+          'x-display-name',
+          'x-handle',
+          'x-timestamp'
+        ]) {
+          assert(!ids.includes(excluded), `smart X scope selected metadata/container ${excluded}`);
+        }
+      });
+
+      test('smart X scope translates a non-semantic authenticated sidebar as independent labels', () => {
+        const context = scanner.createScanContext({ scope: 'smart', site: 'x' });
+        const candidates = scanner.collectPageCandidates('smart', { context, site: 'x' });
+        const ids = candidates.map(candidate => candidate.element.id).filter(Boolean);
+
+        for (const expected of [
+          'x-sidebar-home-label',
+          'x-sidebar-explore-label',
+          'x-sidebar-notifications-label',
+          'x-sidebar-messages-label',
+          'x-sidebar-grok-label',
+          'x-sidebar-bookmarks-label',
+          'x-sidebar-jobs-label',
+          'x-sidebar-communities-label',
+          'x-sidebar-premium-label',
+          'x-sidebar-verified-label'
+        ]) {
+          assert(ids.includes(expected),
+            `smart X scope omitted authenticated sidebar label ${expected}: ${ids.join(', ')}`);
+          const candidate = candidates.find(item => item.element.id === expected);
+          assert(candidate?.siteRole === 'navigation-label',
+            `${expected} did not retain navigation semantics`);
+        }
+        for (const excluded of [
+          'x-sidebar-home-badge',
+          'x-sidebar-home-control',
+          'x-sidebar-explore-control'
+        ]) {
+          assert(!ids.includes(excluded),
+            `smart X scope selected composite sidebar node ${excluded}`);
+        }
+      });
+
+      test('X profile preserves deeply nested top bar and rail labels without opening their shells', () => {
+        const fixture = document.createElement('div');
+        fixture.id = 'x-authenticated-shell-fixture';
+        fixture.innerHTML = `
+          <div id="x-authenticated-top-wrapper">
+            <div id="x-authenticated-top-layout"
+                 style="display:flex;width:860px;height:52px;overflow:hidden">
+              <a id="x-auth-top-home-control"
+                 data-testid="AppTabBar_Home_Link"
+                 href="/home"
+                 style="display:flex;width:190px;max-height:36px;overflow:hidden;
+                        -webkit-line-clamp:1">
+                <div id="x-auth-top-home-label-wrap">
+                  <span id="x-auth-top-home-label">Home</span>
+                  <span id="x-auth-top-home-badge">9</span>
+                </div>
+              </a>
+              <a id="x-auth-top-explore-control"
+                 data-testid="AppTabBar_Explore_Link"
+                 href="/explore"
+                 style="display:flex;width:190px;max-height:36px;overflow:hidden">
+                <span id="x-auth-top-explore-label">Explore</span>
+              </a>
+              <a id="x-auth-top-notifications-control"
+                 data-testid="AppTabBar_Notifications_Link"
+                 href="/notifications"
+                 style="display:flex;width:190px;max-height:36px;overflow:hidden">
+                <span id="x-auth-top-notifications-label">Notifications</span>
+              </a>
+            </div>
+          </div>
+          <div id="x-authenticated-rail-wrapper">
+            <div id="x-authenticated-rail"
+                 style="display:block;width:230px;max-height:420px;overflow:auto">
+              <a id="x-auth-rail-home-control" href="/home"
+                 style="display:flex;width:210px;height:38px;overflow:hidden">
+                <span id="x-auth-rail-home-label">Home</span>
+              </a>
+              <a id="x-auth-rail-profile-control" href="/alice"
+                 style="display:flex;width:210px;height:38px;overflow:hidden">
+                <span id="x-auth-rail-profile-label">Profile</span>
+              </a>
+              <a id="x-auth-rail-messages-control" href="/messages"
+                 style="display:flex;width:210px;height:38px;overflow:hidden">
+                <span id="x-auth-rail-messages-label">Messages</span>
+              </a>
+              <a id="x-auth-rail-bookmarks-control" href="/i/bookmarks"
+                 style="display:flex;width:210px;height:38px;overflow:hidden">
+                <span id="x-auth-rail-bookmarks-label">Bookmarks</span>
+              </a>
+            </div>
+          </div>
+        `;
+        document.body.append(fixture);
+
+        try {
+          const context = scanner.createScanContext({ scope: 'smart', site: 'x' });
+          const candidates = scanner.collectPageCandidates('smart', {
+            context,
+            site: 'x'
+          });
+          const byId = new Map(candidates.map(candidate => [candidate.element.id, candidate]));
+
+          for (const expected of [
+            'x-auth-top-home-label',
+            'x-auth-top-explore-label',
+            'x-auth-top-notifications-label',
+            'x-auth-rail-home-label',
+            'x-auth-rail-profile-label',
+            'x-auth-rail-messages-label',
+            'x-auth-rail-bookmarks-label',
+            'tweet-one-text'
+          ]) {
+            assert(byId.has(expected),
+              `nested authenticated X scan omitted ${expected}: ${Array.from(byId.keys()).join(', ')}`);
+          }
+          for (const excluded of [
+            'x-auth-top-home-badge',
+            'x-auth-top-home-control',
+            'x-auth-rail-home-control',
+            'x-authenticated-top-layout',
+            'x-authenticated-rail'
+          ]) {
+            assert(!byId.has(excluded),
+              `nested authenticated X scan selected composite shell ${excluded}`);
+          }
+          assert(byId.get('x-auth-top-home-label')?.siteRole === 'navigation-label',
+            'top bar label did not retain X navigation semantics');
+          assert(byId.get('x-auth-rail-profile-label')?.siteRole === 'navigation-label',
+            'arbitrary profile rail label did not retain X navigation semantics');
+        } finally {
+          fixture.remove();
+        }
+      });
+
+      test('authenticated X shells retain controls outside nested route clusters', () => {
+        const fixture = document.createElement('div');
+        fixture.id = 'x-nested-shell-coverage-fixture';
+        fixture.innerHTML = `
+          <div id="x-coverage-sidebar"
+               data-testid="SideNav"
+               style="display:block;width:230px;height:420px;overflow:hidden">
+            <div id="x-coverage-side-route-cluster"
+                 style="display:block;width:220px;height:100px;overflow:hidden">
+              <a id="x-coverage-home-control"
+                 data-testid="SideNav_Home_Link"
+                 href="/home"
+                 style="display:flex;width:210px;height:38px">
+                <span><span id="x-coverage-home-label">Home</span></span>
+              </a>
+              <a id="x-coverage-explore-control"
+                 data-testid="SideNav_Explore_Link"
+                 href="/explore"
+                 style="display:flex;width:210px;height:38px">
+                <span><span id="x-coverage-explore-label">Explore</span></span>
+              </a>
+            </div>
+            <button id="x-coverage-compose-control"
+                    data-testid="SideNav_NewTweet_Button"
+                    type="button"
+                    style="display:flex;width:210px;height:42px">
+              <span id="x-coverage-compose-label">Post</span>
+            </button>
+            <button id="x-coverage-account-control"
+                    data-testid="SideNav_AccountSwitcher_Button"
+                    type="button"
+                    style="display:flex;width:210px;height:42px">
+              <span id="x-coverage-account-label">Account</span>
+            </button>
+            <button id="x-coverage-more-control"
+                    data-testid="SideNav_More_Button"
+                    type="button"
+                    style="display:flex;width:210px;height:42px">
+              <span id="x-coverage-more-label">More</span>
+            </button>
+            <div hidden>
+              <button type="button"><span id="x-coverage-hidden-label">Hidden action</span></button>
+            </div>
+          </div>
+          <div id="x-coverage-appbar"
+               data-testid="AppTabBar"
+               style="display:flex;width:600px;height:52px;overflow:hidden">
+            <div id="x-coverage-app-route-cluster"
+                 style="display:flex;width:360px;height:48px;overflow:hidden">
+              <a id="x-coverage-app-home-control"
+                 data-testid="AppTabBar_Home_Link"
+                 href="/home"
+                 style="display:block;width:180px;height:44px">
+                <span id="x-coverage-app-home-label">For you</span>
+              </a>
+              <a id="x-coverage-app-explore-control"
+                 data-testid="AppTabBar_Explore_Link"
+                 href="/explore"
+                 style="display:block;width:180px;height:44px">
+                <span id="x-coverage-app-explore-label">Explore</span>
+              </a>
+            </div>
+            <a id="x-coverage-app-notifications-control"
+               data-testid="AppTabBar_Notifications_Link"
+               href="/notifications"
+               style="display:block;width:120px;height:44px">
+              <span id="x-coverage-app-notifications-label">Notifications</span>
+            </a>
+            <a id="x-coverage-app-messages-control"
+               data-testid="AppTabBar_Messages_Link"
+               href="/messages"
+               style="display:block;width:100px;height:44px">
+              <span id="x-coverage-app-messages-label">Messages</span>
+            </a>
+          </div>
+        `;
+        document.body.append(fixture);
+
+        try {
+          const adapters = window.OITSiteAdapters;
+          const roots = adapters.findAdaptiveRoots(document.body, { site: 'x' });
+          const sidebar = document.querySelector('#x-coverage-sidebar');
+          const appbar = document.querySelector('#x-coverage-appbar');
+          const rootIds = roots.map(root => root.id || root.tagName).join(', ');
+
+          assert(roots.includes(sidebar),
+            `nested SideNav clusters replaced their shell and lost uncovered actions: ${rootIds}`);
+          assert(roots.includes(appbar),
+            `nested AppTabBar clusters replaced their shell and lost sibling tabs: ${rootIds}`);
+
+          const context = scanner.createScanContext({ scope: 'smart', site: 'x' });
+          const byId = new Map(scanner.collectPageCandidates('smart', {
+            context,
+            site: 'x'
+          }).map(candidate => [candidate.element.id, candidate]));
+
+          for (const expected of [
+            'x-coverage-home-label',
+            'x-coverage-explore-label',
+            'x-coverage-compose-label',
+            'x-coverage-account-label',
+            'x-coverage-more-label',
+            'x-coverage-app-home-label',
+            'x-coverage-app-explore-label',
+            'x-coverage-app-notifications-label',
+            'x-coverage-app-messages-label'
+          ]) {
+            assert(byId.has(expected),
+              `authenticated nested X shell omitted ${expected}: `
+                + `${Array.from(byId.keys()).join(', ')}`);
+            assert(byId.get(expected)?.siteRole === 'navigation-label',
+              `${expected} did not retain navigation semantics`);
+          }
+          assert(!byId.has('x-coverage-hidden-label'),
+            'hidden nested navigation clone was selected');
+        } finally {
+          fixture.remove();
+        }
+      });
+
+      test('smart X scope discovers a reused menu when it changes from hidden to visible', () => {
+        document.body.insertAdjacentHTML('afterbegin', `
+          <header id="x-reveal-header">
+            <nav id="x-reveal-nav" aria-label="Primary">
+              <button id="x-more-control" type="button" aria-expanded="false">More</button>
+              <div id="x-more-menu" role="menu" hidden>
+                <a id="x-lists-label" href="/lists" role="menuitem">Lists</a>
+                <a id="x-bookmarks-label" href="/bookmarks" role="menuitem">Bookmarks</a>
+              </div>
+            </nav>
+          </header>
+        `);
+        const context = scanner.createScanContext({ scope: 'smart' });
+        const initialIds = scanner.collectPageCandidates('smart', { context })
+          .map(candidate => candidate.element.id);
+        assert(initialIds.includes('x-more-control'),
+          'smart X scope omitted the visible menu trigger');
+        assert(!initialIds.includes('x-lists-label'),
+          'hidden X menu was collected before it became visible');
+
+        const menu = document.querySelector('#x-more-menu');
+        menu.hidden = false;
+        menu.parentElement.querySelector('#x-more-control')
+          .setAttribute('aria-expanded', 'true');
+        const revealedIds = scanner.collectDynamicCandidates(menu, 'smart', { context })
+          .map(candidate => candidate.element.id);
+        assert(revealedIds.includes('x-lists-label'),
+          'revealed X menu did not collect the Lists label');
+        assert(revealedIds.includes('x-bookmarks-label'),
+          'revealed X menu did not collect the Bookmarks label');
+      });
+
+      test('smart X scope discovers compact home tabs without a tablist or navigation landmark', () => {
+        document.body.insertAdjacentHTML('beforeend', `
+          <main id="x-home-tab-fixture" style="display:block;width:600px;min-height:120px">
+            <div id="x-home-tabs"
+                 style="display:flex;width:480px;height:44px;overflow:hidden">
+              <a id="x-for-you-control" role="tab" href="/home"
+                 style="display:block;width:230px;height:36px">
+                <span id="x-for-you-label">For you</span>
+              </a>
+              <a id="x-following-control" role="tab" href="/home?filter=following"
+                 style="display:block;width:230px;height:36px">
+                <span id="x-following-label">Following</span>
+              </a>
+            </div>
+          </main>
+        `);
+
+        const context = scanner.createScanContext({ scope: 'smart', site: 'x' });
+        const candidates = scanner.collectPageCandidates('smart', {
+          context,
+          site: 'x'
+        });
+        const ids = candidates.map(candidate => candidate.element.id).filter(Boolean);
+
+        assert(ids.includes('x-for-you-label'),
+          `compact home tabs omitted For you: ${ids.join(', ')}`);
+        assert(ids.includes('x-following-label'),
+          `compact home tabs omitted Following: ${ids.join(', ')}`);
+      });
+
+      test('X profile groups same-path tabs identified only by ARIA selection state', () => {
+        const fixture = document.createElement('div');
+        fixture.id = 'x-aria-tabs-fixture';
+        fixture.innerHTML = `
+          <main style="display:block;width:600px;min-height:100px">
+            <div id="x-aria-tabs"
+                 style="display:flex;width:480px;height:44px;overflow:hidden">
+              <a id="x-aria-for-you-control" aria-selected="true" href="/home"
+                 style="display:block;width:230px;height:36px">
+                <span id="x-aria-for-you-label">For you</span>
+              </a>
+              <a id="x-aria-following-control" aria-selected="false" href="/home"
+                 style="display:block;width:230px;height:36px">
+                <span id="x-aria-following-label">Following</span>
+              </a>
+            </div>
+          </main>
+        `;
+        document.body.append(fixture);
+
+        try {
+          const context = scanner.createScanContext({ scope: 'smart', site: 'x' });
+          const candidates = scanner.collectPageCandidates('smart', {
+            context,
+            site: 'x'
+          });
+          const byId = new Map(candidates.map(candidate => [candidate.element.id, candidate]));
+          const roots = window.OITSiteAdapters.findAdaptiveRoots(document.body, { site: 'x' });
+
+          assert(roots.includes(document.querySelector('#x-aria-tabs')),
+            'X profile did not expose the same-path ARIA-selected tab root');
+          for (const expected of ['x-aria-for-you-label', 'x-aria-following-label']) {
+            assert(byId.has(expected),
+              `same-path ARIA-selected X tab omitted ${expected}`);
+            assert(byId.get(expected)?.siteRole === 'navigation-label',
+              `${expected} did not retain X navigation semantics`);
+          }
+          assert(!byId.has('x-aria-for-you-control')
+            && !byId.has('x-aria-following-control'),
+          'X tab translation selected the composite anchor instead of its label');
+        } finally {
+          fixture.remove();
+        }
+      });
+
+      test('X profile discovers an identifier-free authenticated rail from route evidence', () => {
+        const fixture = document.createElement('div');
+        fixture.id = 'x-no-testid-rail-fixture';
+        fixture.innerHTML = `
+          <div id="x-no-testid-rail"
+               style="display:block;width:230px;height:210px;overflow:hidden">
+            <a id="x-no-testid-home-control" aria-current="page" href="/home"
+               style="display:flex;width:210px;height:38px">
+              <span id="x-no-testid-home-label">Home</span>
+            </a>
+            <a id="x-no-testid-profile-control" href="/nina"
+               style="display:flex;width:210px;height:38px">
+              <span id="x-no-testid-profile-label">Profile</span>
+            </a>
+            <a id="x-no-testid-settings-control" href="/settings"
+               style="display:flex;width:210px;height:38px">
+              <span id="x-no-testid-settings-label">Settings</span>
+            </a>
+            <a id="x-no-testid-more-control" href="/nina/more"
+               style="display:flex;width:210px;height:38px">
+              <span id="x-no-testid-more-label">More</span>
+            </a>
+          </div>
+        `;
+        document.body.append(fixture);
+
+        try {
+          const adapters = window.OITSiteAdapters;
+          const rail = document.querySelector('#x-no-testid-rail');
+          const roots = adapters.findAdaptiveRoots(document.body, { site: 'x' });
+          const context = scanner.createScanContext({ scope: 'smart', site: 'x' });
+          const byId = new Map(scanner.collectPageCandidates('smart', {
+            context,
+            site: 'x'
+          }).map(candidate => [candidate.element.id, candidate]));
+
+          assert(roots.includes(rail),
+            'X profile did not expose the identifier-free navigation rail');
+          for (const expected of [
+            'x-no-testid-home-label',
+            'x-no-testid-profile-label',
+            'x-no-testid-settings-label',
+            'x-no-testid-more-label'
+          ]) {
+            assert(byId.has(expected),
+              `identifier-free X rail omitted ${expected}`);
+            assert(byId.get(expected)?.siteRole === 'navigation-label',
+              `${expected} did not retain X navigation semantics`);
+          }
+        } finally {
+          fixture.remove();
+        }
+      });
+
+      test('composite X navigation anchors select label text but never numeric badges', () => {
+        const fixture = document.createElement('div');
+        fixture.id = 'x-badge-fixture';
+        fixture.innerHTML = `
+          <div id="x-badge-rail" style="display:block;width:230px;height:90px;overflow:hidden">
+            <a id="x-badge-home-control" href="/home"
+               style="display:flex;width:210px;height:38px">
+              <svg aria-hidden="true" width="18" height="18"><path d="M0 0h12v12z"></path></svg>
+              <span id="x-badge-home-label">Home</span>
+              <span id="x-badge-home-count">12</span>
+            </a>
+            <a id="x-badge-explore-control" href="/explore"
+               style="display:flex;width:210px;height:38px">
+              <span id="x-badge-explore-label">Explore</span>
+            </a>
+          </div>
+        `;
+        document.body.append(fixture);
+
+        try {
+          const context = scanner.createScanContext({ scope: 'smart', site: 'x' });
+          const ids = scanner.collectPageCandidates('smart', {
+            context,
+            site: 'x'
+          }).map(candidate => candidate.element.id).filter(Boolean);
+
+          assert(ids.includes('x-badge-home-label'),
+            `composite X navigation omitted its label: ${ids.join(', ')}`);
+          assert(!ids.includes('x-badge-home-count'),
+            'composite X navigation translated its numeric badge');
+          assert(!ids.includes('x-badge-home-control'),
+            'composite X navigation replaced the anchor instead of its label');
+        } finally {
+          fixture.remove();
+        }
+      });
+
+      test('dynamic X tabs rescan their nearest adaptive cluster when siblings arrive later', () => {
+        const fixture = document.createElement('div');
+        fixture.id = 'x-incremental-tabs-fixture';
+        fixture.innerHTML = `
+          <main id="x-incremental-tabs-main"
+                style="display:block;width:600px;min-height:100px">
+            <article>
+              <div data-testid="tweetText" id="x-incremental-tabs-post" lang="en" dir="auto">
+                Timeline content establishes the reading root before tabs render.
+              </div>
+            </article>
+            <div id="x-incremental-tabs"
+                 style="display:flex;width:480px;height:44px;overflow:hidden">
+              <a id="x-incremental-for-you-control" aria-selected="true" href="/home"
+                 style="display:block;width:230px;height:36px">
+                <span id="x-incremental-for-you-label">For you</span>
+              </a>
+            </div>
+          </main>
+        `;
+        document.body.append(fixture);
+
+        try {
+          const context = scanner.createScanContext({ scope: 'smart', site: 'x' });
+          scanner.collectPageCandidates('smart', { context, site: 'x' });
+          const following = document.createElement('a');
+          following.id = 'x-incremental-following-control';
+          following.setAttribute('aria-selected', 'false');
+          following.setAttribute('href', '/home');
+          following.setAttribute('style', 'display:block;width:230px;height:36px');
+          following.innerHTML =
+            '<span id="x-incremental-following-label">Following</span>';
+          document.querySelector('#x-incremental-tabs').append(following);
+
+          const ids = scanner.collectDynamicCandidates(following, 'smart', {
+            context,
+            site: 'x'
+          }).map(candidate => candidate.element.id).filter(Boolean);
+
+          assert(ids.includes('x-incremental-for-you-label'),
+            `dynamic X tab scan omitted the already-rendered sibling: ${ids.join(', ')}`);
+          assert(ids.includes('x-incremental-following-label'),
+            `dynamic X tab scan omitted the newly-rendered sibling: ${ids.join(', ')}`);
+        } finally {
+          fixture.remove();
+        }
+      });
+
+      test('X profile keeps arbitrary dynamic rail links and profile tabs in navigation units', () => {
+        document.body.insertAdjacentHTML('beforeend', `
+          <div id="x-dynamic-rail" style="display:block;width:240px;height:180px">
+            <a id="x-dynamic-home-control" href="/home"
+               style="display:flex;width:220px;height:36px">
+              <span id="x-dynamic-home-label">Home</span>
+            </a>
+            <a id="x-dynamic-profile-control" href="/alice"
+               style="display:flex;width:220px;height:36px">
+              <span id="x-dynamic-profile-label">Profile</span>
+            </a>
+            <a id="x-dynamic-more-control" href="/alice/more"
+               style="display:flex;width:220px;height:36px">
+              <span id="x-dynamic-more-label">More</span>
+            </a>
+          </div>
+          <main id="x-profile-fixture" style="display:block;width:640px;min-height:140px">
+            <div id="x-profile-tabs"
+                 style="display:flex;width:600px;height:44px;overflow:hidden">
+              <a id="x-profile-posts-control" href="/alice"
+                 style="display:block;width:140px;height:36px">
+                <span id="x-profile-posts-label">Posts</span>
+              </a>
+              <a id="x-profile-replies-control" href="/alice/with_replies"
+                 style="display:block;width:140px;height:36px">
+                <span id="x-profile-replies-label">Replies</span>
+              </a>
+              <a id="x-profile-media-control" href="/alice/media"
+                 style="display:block;width:140px;height:36px">
+                <span id="x-profile-media-label">Media</span>
+              </a>
+            </div>
+          </main>
+        `);
+
+        const context = scanner.createScanContext({ scope: 'smart', site: 'x' });
+        const candidates = scanner.collectPageCandidates('smart', {
+          context,
+          site: 'x'
+        });
+        const byId = new Map(candidates.map(candidate => [candidate.element.id, candidate]));
+
+        for (const expected of [
+          'x-dynamic-home-label',
+          'x-dynamic-profile-label',
+          'x-dynamic-more-label',
+          'x-profile-posts-label',
+          'x-profile-replies-label',
+          'x-profile-media-label'
+        ]) {
+          assert(byId.has(expected),
+            `dynamic X navigation omitted ${expected}`);
+          assert(byId.get(expected)?.siteRole === 'navigation-label',
+            `${expected} did not retain navigation semantics`);
+        }
+      });
+
+      test('X profile discovers the AppTabBar without semantic landmarks or navigation layout', () => {
+        document.body.insertAdjacentHTML('beforeend', `
+          <div id="x-structural-nav"
+               data-testid="AppTabBar"
+               style="display:block;width:240px;height:150px;overflow:hidden">
+            <a id="x-structural-home-control"
+               data-testid="AppTabBar_Home_Link"
+               href="/home"
+               style="display:flex;width:220px;height:34px">
+              <span id="x-structural-home-label">Home</span>
+            </a>
+            <a id="x-structural-explore-control"
+               data-testid="AppTabBar_Explore_Link"
+               href="/explore"
+               style="display:flex;width:220px;height:34px">
+              <span id="x-structural-explore-label">Explore</span>
+            </a>
+            <a id="x-structural-notifications-control"
+               data-testid="AppTabBar_Notifications_Link"
+               href="/notifications"
+               style="display:flex;width:220px;height:34px">
+              <span id="x-structural-notifications-label">Notifications</span>
+            </a>
+          </div>
+        `);
+
+        const context = scanner.createScanContext({ scope: 'smart', site: 'x' });
+        const candidates = scanner.collectPageCandidates('smart', { context, site: 'x' });
+        const ids = candidates.map(candidate => candidate.element.id).filter(Boolean);
+
+        for (const expected of [
+          'x-structural-home-label',
+          'x-structural-explore-label',
+          'x-structural-notifications-label'
+        ]) {
+          assert(ids.includes(expected),
+            `X structural navigation omitted ${expected}: ${ids.join(', ')}`);
+          const candidate = candidates.find(item => item.element.id === expected);
+          assert(candidate?.siteRole === 'navigation-label',
+            `${expected} did not retain navigation semantics`);
+        }
+      });
+
+      test('X site adapter exposes navigation roots through a reusable profile contract', () => {
+        const adapters = window.OITSiteAdapters;
+        assert(typeof adapters.findAdaptiveRoots === 'function',
+          'X adapter does not expose adaptive root discovery');
+        assert(typeof adapters.getAdaptiveRoot === 'function',
+          'X adapter does not expose a dynamic root lookup');
+        assert(typeof adapters.diagnoseAdaptiveRoots === 'function',
+          'X adapter does not expose adaptive root diagnostics');
+
+        const expectedRoot = document.querySelector('#x-structural-nav');
+        const roots = adapters.findAdaptiveRoots(document.body, { site: 'x' });
+        const diagnostics = adapters.diagnoseAdaptiveRoots(document.body, { site: 'x' });
+        assert(roots.includes(expectedRoot),
+          'X adapter did not return the structural AppTabBar root');
+        assert(
+          diagnostics.some(item => (
+            item.root === expectedRoot && item.source === 'x:explicit'
+          )),
+          'X adapter did not attribute the structural AppTabBar root'
+        );
+        assert(
+          adapters.getAdaptiveRoot(
+            document.querySelector('#x-structural-home-label'),
+            { site: 'x' }
+          ) === expectedRoot,
+          'X adapter could not resolve the dynamic root by an AppTabBar label'
+        );
+      });
+
+      test('X profile treats stable SideNav action identifiers as navigation semantics', () => {
+        document.body.insertAdjacentHTML('beforeend', `
+          <div id="x-sidenav-profile-fixture"
+               style="display:block;width:230px;height:90px;overflow:hidden">
+            <button id="x-sidenav-compose-control"
+                    data-testid="SideNav_NewTweet_Button"
+                    type="button"
+                    style="display:flex;width:210px;height:40px">
+              <span id="x-sidenav-compose-label">Post</span>
+            </button>
+            <button id="x-sidenav-account-control"
+                    data-testid="SideNav_AccountSwitcher_Button"
+                    type="button"
+                    style="display:flex;width:210px;height:40px">
+              <span id="x-sidenav-account-label">Account</span>
+            </button>
+          </div>
+        `);
+
+        try {
+          const adapters = window.OITSiteAdapters;
+          const root = document.querySelector('#x-sidenav-profile-fixture');
+          const label = document.querySelector('#x-sidenav-account-label');
+          const roots = adapters.findAdaptiveRoots(document.body, { site: 'x' });
+
+          assert(roots.includes(root),
+            'X adapter did not group stable SideNav action controls');
+          assert(adapters.getAdaptiveRoot(label, { site: 'x' }) === root,
+            'X adapter did not resolve a SideNav label to its action cluster');
+          assert(adapters.getSemanticContentRole('x', label) === 'navigation-label',
+            'SideNav action labels did not retain navigation semantics');
+          assert(
+            adapters.getElementPolicy('x', label, 'smart')?.action === 'keep',
+            'SideNav action policy did not keep its label eligible'
+          );
+        } finally {
+          document.querySelector('#x-sidenav-profile-fixture')?.remove();
+        }
+      });
+
+      test('X dynamic wrapper reveals an AppTabBar outside the selected content root', () => {
+        const wrapper = document.createElement('div');
+        wrapper.id = 'x-dynamic-appbar-wrapper';
+        wrapper.hidden = true;
+        wrapper.innerHTML = `
+          <div id="x-dynamic-appbar" data-testid="AppTabBar"
+               style="display:block;width:240px;height:150px;overflow:hidden">
+            <a id="x-dynamic-appbar-home-control"
+               data-testid="AppTabBar_Home_Link"
+               href="/home"
+               style="display:flex;width:220px;height:34px">
+              <span id="x-dynamic-appbar-home-label">Home</span>
+            </a>
+            <a id="x-dynamic-appbar-explore-control"
+               data-testid="AppTabBar_Explore_Link"
+               href="/explore"
+               style="display:flex;width:220px;height:34px">
+              <span id="x-dynamic-appbar-explore-label">Explore</span>
+            </a>
+            <a id="x-dynamic-appbar-notifications-control"
+               data-testid="AppTabBar_Notifications_Link"
+               href="/notifications"
+               style="display:flex;width:220px;height:34px">
+              <span id="x-dynamic-appbar-notifications-label">Notifications</span>
+            </a>
+          </div>
+        `;
+        document.body.append(wrapper);
+
+        try {
+          const context = scanner.createScanContext({ scope: 'smart', site: 'x' });
+          scanner.collectPageCandidates('smart', { context, site: 'x' });
+          assert(context.contentRoot && !context.contentRoot.contains(wrapper),
+            'fixture did not place the AppTabBar outside the content root');
+
+          wrapper.hidden = false;
+          const candidates = scanner.collectDynamicCandidates(wrapper, 'smart', {
+            context,
+            site: 'x'
+          });
+          const ids = candidates.map(candidate => candidate.element.id);
+          for (const expected of [
+            'x-dynamic-appbar-home-label',
+            'x-dynamic-appbar-explore-label',
+            'x-dynamic-appbar-notifications-label'
+          ]) {
+            assert(ids.includes(expected),
+              `dynamic X AppTabBar wrapper omitted ${expected}: ${ids.join(', ')}`);
+          }
+        } finally {
+          wrapper.remove();
+        }
+      });
+
+      test('site profile registry routes optional adapters without changing generic fallback', () => {
+        const adapters = window.OITSiteAdapters;
+        const root = document.querySelector('#x-structural-nav');
+        const calls = [];
+        const registry = adapters.createSiteAdapterRegistry([{
+          id: 'fixture',
+          matches(documentRef, locationRef) {
+            return locationRef?.hostname === 'fixture.example';
+          },
+          findAdaptiveRoots(base, options) {
+            calls.push(['roots', base.id, options.site]);
+            return [root];
+          },
+          getAdaptiveRoot(element, options) {
+            calls.push(['root', element.id, options.site]);
+            return root;
+          },
+          findContentRoots(base, options) {
+            calls.push(['contentRoots', base.id, options.site]);
+            return [root];
+          },
+          getContentRoot(element, options) {
+            calls.push(['contentRoot', element.id, options.site]);
+            return root;
+          }
+        }]);
+
+        assert(registry.detectSite(document, { hostname: 'fixture.example' }) === 'fixture',
+          'registered profile was not selected by the registry');
+        assert(registry.detectSite(document, { hostname: 'unknown.example' }) === 'generic',
+          'unknown host did not fall back to generic mode');
+        assert(registry.findAdaptiveRoots(document.body, { site: 'fixture' })[0] === root,
+          'registered profile root discovery was not delegated');
+        assert(
+          registry.getAdaptiveRoot(root, { site: 'fixture' }) === root,
+          'registered profile dynamic root lookup was not delegated'
+        );
+        assert(registry.findContentRoots(document.body, { site: 'fixture' })[0] === root,
+          'registered profile content-root discovery was not delegated');
+        assert(
+          registry.getContentRoot(root, { site: 'fixture' }) === root,
+          'registered profile content-root lookup was not delegated'
+        );
+        assert(calls.length === 4,
+          `registered profile received unexpected calls: ${JSON.stringify(calls)}`);
+      });
+
+      test('X profile discovers an account dropdown outside the content root after it opens', () => {
+        document.body.insertAdjacentHTML('beforeend', `
+          <div id="x-account-dropdown"
+               data-testid="Dropdown"
+               hidden
+               style="display:block;width:220px;height:100px">
+            <a id="x-account-settings-label"
+               href="/settings"
+               role="menuitem"
+               style="position:absolute;top:0;left:0;display:block;width:1px;height:1px">
+              Settings
+            </a>
+            <a id="x-account-shortcuts-label"
+               href="/i/keyboard_shortcuts"
+               role="menuitem"
+               style="position:absolute;top:0;left:0;display:block;width:1px;height:1px">
+              Keyboard shortcuts
+            </a>
+            <button id="x-account-logout-label"
+                    type="button"
+                    role="menuitem"
+                    style="position:absolute;top:0;left:0;display:block;width:1px;height:1px">
+              Log out
+            </button>
+          </div>
+        `);
+        const context = scanner.createScanContext({ scope: 'smart', site: 'x' });
+        scanner.collectPageCandidates('smart', { context, site: 'x' });
+
+        const dropdown = document.querySelector('#x-account-dropdown');
+        dropdown.hidden = false;
+        const ids = scanner.collectDynamicCandidates(dropdown, 'smart', {
+          context,
+          site: 'x'
+        }).map(candidate => candidate.element.id).filter(Boolean);
+
+        for (const expected of [
+          'x-account-settings-label',
+          'x-account-shortcuts-label',
+          'x-account-logout-label'
+        ]) {
+          assert(ids.includes(expected),
+            `dynamic X account dropdown omitted ${expected}: ${ids.join(', ')}`);
+        }
+      });
+
+      test('X right sidebar metadata policy does not suppress unrelated visible content', () => {
+        document.body.insertAdjacentHTML('beforeend', `
+          <div id="x-right-sidebar" data-testid="sidebarColumn">
+            <section>
+              <h2 id="x-sidebar-heading">What is happening</h2>
+              <p id="x-sidebar-copy">A visible trend explanation remains available in full-page mode.</p>
+            </section>
+          </div>
+        `);
+        const context = scanner.createScanContext({ scope: 'full', site: 'x' });
+        const heading = scanner.classifyElement(
+          document.querySelector('#x-sidebar-heading'),
+          'full',
+          context,
+          document.body
+        );
+        const copy = scanner.classifyElement(
+          document.querySelector('#x-sidebar-copy'),
+          'full',
+          context,
+          document.body
+        );
+
+        assert(heading.allow && heading.siteRole !== 'metadata',
+          `sidebar heading was suppressed by metadata policy: ${JSON.stringify(heading)}`);
+        assert(copy.allow && copy.siteRole !== 'metadata',
+          `sidebar copy was suppressed by metadata policy: ${JSON.stringify(copy)}`);
+      });
+
+      test('smart X scope translates supplemental sidebar copy without account chrome', () => {
+        document.body.insertAdjacentHTML('beforeend', `
+          <div id="x-smart-sidebar"
+               data-testid="sidebarColumn"
+               style="display:block;width:320px;min-height:420px">
+            <aside id="x-smart-sidebar-aside"
+                   role="complementary"
+                   aria-label="Timeline: Trending now">
+              <section>
+                <h2 id="x-smart-sidebar-heading">What is happening</h2>
+                <div data-testid="trend">
+                  <div id="x-smart-trend-title" lang="en" dir="ltr">
+                    Open source translation tools
+                  </div>
+                  <div id="x-smart-trend-description" lang="en" dir="auto">
+                    Developers are improving browser translation for every site.
+                  </div>
+                  <div id="x-smart-trend-count">12.4K posts</div>
+                </div>
+                <div data-testid="UserCell">
+                  <div data-testid="User-Name">
+                    <span id="x-smart-user-name">Alice Example</span>
+                    <span id="x-smart-user-handle">@alice</span>
+                  </div>
+                  <div id="x-smart-user-bio" lang="en" dir="auto">
+                    Building accessible tools for multilingual readers.
+                  </div>
+                  <span id="x-smart-user-badge">3</span>
+                  <time id="x-smart-user-time" datetime="2026-11-19T00:00:00Z">2h</time>
+                  <button id="x-smart-follow-control" type="button">
+                    <span id="x-smart-follow-label">Follow</span>
+                  </button>
+                </div>
+              </section>
+            </aside>
+          </div>
+        `);
+
+        try {
+          const context = scanner.createScanContext({ scope: 'smart', site: 'x' });
+          const candidates = scanner.collectPageCandidates('smart', {
+            context,
+            site: 'x'
+          });
+          const byId = new Map(candidates.map(candidate => [candidate.element.id, candidate]));
+
+          for (const expected of [
+            'x-smart-sidebar-heading',
+            'x-smart-trend-title',
+            'x-smart-trend-description',
+            'x-smart-user-bio'
+          ]) {
+            assert(byId.has(expected),
+              `smart X supplemental scan omitted ${expected}: `
+                + `${Array.from(byId.keys()).join(', ')}`);
+            assert(byId.get(expected)?.siteRole === 'supplemental-content',
+              `${expected} did not retain supplemental semantics`);
+          }
+
+          for (const excluded of [
+            'x-smart-trend-count',
+            'x-smart-user-name',
+            'x-smart-user-handle',
+            'x-smart-user-badge',
+            'x-smart-user-time',
+            'x-smart-follow-label'
+          ]) {
+            assert(!byId.has(excluded),
+              `smart X supplemental scan translated metadata ${excluded}`);
+          }
+        } finally {
+          document.querySelector('#x-smart-sidebar')?.remove();
+        }
+      });
+
+      test('late X supplemental cards are discovered from mutation roots', () => {
+        const context = scanner.createScanContext({ scope: 'smart', site: 'x' });
+        scanner.collectPageCandidates('smart', { context, site: 'x' });
+        const wrapper = document.createElement('div');
+        wrapper.id = 'x-late-sidebar';
+        wrapper.innerHTML = `
+          <div data-testid="sidebarColumn"
+               style="display:block;width:320px;min-height:320px">
+            <aside role="complementary" style="display:block;width:300px;min-height:280px">
+              <h2 id="x-late-sidebar-heading">What is happening</h2>
+              <div id="x-late-trend-title" lang="en" dir="ltr">
+                Browser translation improves while you scroll
+              </div>
+              <div id="x-late-trend-copy" lang="en" dir="auto">
+                New cards must be translated as soon as X renders them.
+              </div>
+            </aside>
+          </div>
+        `;
+        document.body.append(wrapper);
+
+        try {
+          const ids = scanner.collectDynamicCandidates(wrapper, 'smart', {
+            context,
+            site: 'x'
+          }).map(candidate => candidate.element.id).filter(Boolean);
+
+          for (const expected of [
+            'x-late-sidebar-heading',
+            'x-late-trend-title',
+            'x-late-trend-copy'
+          ]) {
+            assert(ids.includes(expected),
+              `late X supplemental card omitted ${expected}: ${ids.join(', ')}`);
+          }
+        } finally {
+          wrapper.remove();
+        }
+      });
+
+      test('late identifier-free X top tabs are discovered without landmark remounting', () => {
+        const context = scanner.createScanContext({ scope: 'smart', site: 'x' });
+        scanner.collectPageCandidates('smart', { context, site: 'x' });
+        const topBar = document.createElement('div');
+        topBar.id = 'x-late-topbar';
+        topBar.style.cssText = 'display:flex;width:620px;height:48px;overflow:hidden';
+        topBar.innerHTML = `
+          <div role="tab" aria-selected="true"
+               style="display:flex;width:300px;height:44px">
+            <span id="x-late-topbar-for-you">For you</span>
+          </div>
+          <div role="tab" aria-selected="false"
+               style="display:flex;width:300px;height:44px">
+            <span id="x-late-topbar-following">Following</span>
+          </div>
+        `;
+        document.body.append(topBar);
+
+        try {
+          const candidates = scanner.collectDynamicCandidates(topBar, 'smart', {
+            context,
+            site: 'x'
+          });
+          const byId = new Map(
+            candidates.map(candidate => [candidate.element.id, candidate])
+          );
+
+          for (const expected of [
+            'x-late-topbar-for-you',
+            'x-late-topbar-following'
+          ]) {
+            assert(byId.has(expected),
+              `late identifier-free X top bar omitted ${expected}: `
+                + `${Array.from(byId.keys()).join(', ')}`);
+            assert(byId.get(expected)?.siteRole === 'navigation-label',
+              `${expected} did not retain adaptive navigation semantics`);
+          }
+        } finally {
+          topBar.remove();
+        }
+      });
+
+      test('authenticated X action controls are discovered without header or nav landmarks', () => {
+        document.body.insertAdjacentHTML('beforeend', `
+          <div id="x-auth-action-shell"
+               style="display:flex;gap:24px;align-items:flex-start;width:900px">
+            <div id="x-auth-action-rail"
+                 style="display:block;width:230px;height:240px;overflow:hidden">
+              <a id="x-auth-profile-control"
+                 data-testid="SideNav_Profile_Link"
+                 href="/alice"
+                 style="display:flex;width:210px;height:38px;overflow:hidden">
+                <span id="x-auth-profile-label">Profile</span>
+              </a>
+              <button id="x-auth-compose-control"
+                      data-testid="SideNav_NewTweet_Button"
+                      type="button"
+                      style="display:flex;width:210px;height:42px;overflow:hidden">
+                <span id="x-auth-compose-label">Post</span>
+              </button>
+              <button id="x-auth-account-control"
+                      data-testid="SideNav_AccountSwitcher_Button"
+                      type="button"
+                      style="display:flex;width:210px;height:42px;overflow:hidden">
+                <span id="x-auth-account-label">Account</span>
+              </button>
+              <button id="x-auth-more-control"
+                      data-testid="SideNav_More_Button"
+                      type="button"
+                      style="display:flex;width:210px;height:38px;overflow:hidden">
+                <span id="x-auth-more-label">More</span>
+              </button>
+            </div>
+            <main id="x-auth-action-main" style="display:block;width:620px;min-height:240px">
+              <article id="x-auth-action-post">
+                <div data-testid="tweetText" id="x-auth-action-post-text"
+                     lang="en" dir="auto">
+                  Authenticated navigation and post content translate together.
+                </div>
+              </article>
+            </main>
+          </div>
+        `);
+
+        try {
+          const context = scanner.createScanContext({ scope: 'smart', site: 'x' });
+          const candidates = scanner.collectPageCandidates('smart', {
+            context,
+            site: 'x'
+          });
+          const byId = new Map(candidates.map(candidate => [candidate.element.id, candidate]));
+
+          for (const expected of [
+            'x-auth-profile-label',
+            'x-auth-compose-label',
+            'x-auth-account-label',
+            'x-auth-more-label',
+            'x-auth-action-post-text'
+          ]) {
+            assert(byId.has(expected),
+              `authenticated X action scan omitted ${expected}: ${Array.from(byId.keys()).join(', ')}`);
+          }
+          for (const expected of [
+            'x-auth-profile-label',
+            'x-auth-compose-label',
+            'x-auth-account-label',
+            'x-auth-more-label'
+          ]) {
+            assert(byId.get(expected)?.siteRole === 'navigation-label',
+              `${expected} did not retain navigation semantics`);
+          }
+          for (const excluded of [
+            'x-auth-profile-control',
+            'x-auth-compose-control',
+            'x-auth-account-control',
+            'x-auth-more-control',
+            'x-auth-action-rail'
+          ]) {
+            assert(!byId.has(excluded),
+              `authenticated X action scan selected composite control ${excluded}`);
+          }
+        } finally {
+          document.querySelector('#x-auth-action-shell')?.remove();
+        }
+      });
+
+      test('authenticated X action clusters discovered after login are translated dynamically', () => {
+        const wrapper = document.createElement('div');
+        wrapper.id = 'x-auth-reveal-wrapper';
+        wrapper.hidden = true;
+        wrapper.innerHTML = `
+          <div id="x-auth-reveal-rail"
+               style="display:block;width:230px;height:190px;overflow:hidden">
+            <a id="x-auth-reveal-profile-control"
+               data-testid="SideNav_Profile_Link"
+               href="/alice"
+               style="display:flex;width:210px;height:38px">
+              <span id="x-auth-reveal-profile-label">Profile</span>
+            </a>
+            <button id="x-auth-reveal-compose-control"
+                    data-testid="SideNav_NewTweet_Button"
+                    type="button"
+                    style="display:flex;width:210px;height:42px">
+              <span id="x-auth-reveal-compose-label">Post</span>
+            </button>
+            <button id="x-auth-reveal-account-control"
+                    data-testid="SideNav_AccountSwitcher_Button"
+                    type="button"
+                    style="display:flex;width:210px;height:42px">
+              <span id="x-auth-reveal-account-label">Account</span>
+            </button>
+          </div>
+        `;
+        document.body.append(wrapper);
+
+        try {
+          const context = scanner.createScanContext({ scope: 'smart', site: 'x' });
+          scanner.collectPageCandidates('smart', { context, site: 'x' });
+
+          wrapper.hidden = false;
+          const ids = scanner.collectDynamicCandidates(wrapper, 'smart', {
+            context,
+            site: 'x'
+          }).map(candidate => candidate.element.id).filter(Boolean);
+
+          for (const expected of [
+            'x-auth-reveal-profile-label',
+            'x-auth-reveal-compose-label',
+            'x-auth-reveal-account-label'
+          ]) {
+            assert(ids.includes(expected),
+              `revealed authenticated X actions omitted ${expected}: ${ids.join(', ')}`);
+          }
+        } finally {
+          wrapper.remove();
+        }
+      });
+
+      test('authenticated X chrome stays visible when layout has no semantic shells', () => {
+        const fixture = document.createElement('div');
+        fixture.id = 'x-authenticated-combined-fixture';
+        fixture.innerHTML = `
+          <div id="x-auth-combined-shell"
+               style="display:flex;flex-direction:column;width:860px;height:620px">
+            <div id="x-auth-combined-tabs"
+                 role="tablist"
+                 style="display:flex;width:600px;height:44px;max-height:44px;
+                        overflow:hidden">
+              <a id="x-auth-combined-for-you-control" role="tab" href="/alice"
+                 style="display:flex;width:190px;height:36px;max-height:36px;
+                        overflow:hidden;-webkit-line-clamp:1">
+                <span id="x-auth-combined-for-you-label"
+                      style="display:-webkit-box;overflow:hidden;
+                             -webkit-line-clamp:1;-webkit-box-orient:vertical">For you</span>
+              </a>
+              <a id="x-auth-combined-following-control" role="tab"
+                 href="/alice/following"
+                 style="display:flex;width:190px;height:36px;max-height:36px;
+                        overflow:hidden;-webkit-line-clamp:1">
+                <span id="x-auth-combined-following-label"
+                      style="display:-webkit-box;overflow:hidden;
+                             -webkit-line-clamp:1;-webkit-box-orient:vertical">Following</span>
+              </a>
+            </div>
+            <div id="x-auth-combined-body"
+                 style="display:flex;gap:24px;align-items:flex-start">
+              <div id="x-auth-combined-rail"
+                   style="display:block;width:230px;height:390px;overflow:hidden">
+                <a id="x-auth-combined-profile-control" href="/alice"
+                   style="display:flex;width:210px;height:38px;max-height:38px;
+                          overflow:hidden;-webkit-line-clamp:1">
+                  <span id="x-auth-combined-profile-label"
+                        style="display:-webkit-box;overflow:hidden;
+                               -webkit-line-clamp:1;-webkit-box-orient:vertical">Profile</span>
+                  <span id="x-auth-combined-profile-badge"
+                        style="display:block;width:18px;height:18px">3</span>
+                </a>
+                <a id="x-auth-combined-settings-control" href="/settings"
+                   style="display:flex;width:210px;height:38px;max-height:38px;
+                          overflow:hidden;-webkit-line-clamp:1">
+                  <span id="x-auth-combined-settings-label"
+                        style="display:-webkit-box;overflow:hidden;
+                               -webkit-line-clamp:1;-webkit-box-orient:vertical">Settings</span>
+                </a>
+                <a id="x-auth-combined-messages-control" href="/messages"
+                   style="display:flex;width:210px;height:38px;max-height:38px;
+                          overflow:hidden;-webkit-line-clamp:1">
+                  <span id="x-auth-combined-messages-label"
+                        style="display:-webkit-box;overflow:hidden;
+                               -webkit-line-clamp:1;-webkit-box-orient:vertical">Messages</span>
+                </a>
+              </div>
+              <main id="x-auth-combined-main"
+                    style="display:block;width:600px;min-height:390px">
+                <article id="x-auth-combined-post">
+                  <div data-testid="User-Name" id="x-auth-combined-account">
+                    <span>Alice Example</span>
+                    <span>@alice</span>
+                  </div>
+                  <time datetime="2026-11-19T00:00:00Z">2h</time>
+                  <div data-testid="tweetText"
+                       id="x-auth-combined-post-text"
+                       lang="en"
+                       dir="auto">
+                    Authenticated navigation remains readable beside the timeline.
+                  </div>
+                  <div data-engagement-action="reply">
+                    <span>12 replies</span>
+                    <span>48 likes</span>
+                  </div>
+                </article>
+              </main>
+            </div>
+          </div>
+        `;
+        document.body.append(fixture);
+
+        const controls = [
+          document.querySelector('#x-auth-combined-for-you-control'),
+          document.querySelector('#x-auth-combined-following-control'),
+          document.querySelector('#x-auth-combined-profile-control'),
+          document.querySelector('#x-auth-combined-settings-control'),
+          document.querySelector('#x-auth-combined-messages-control')
+        ];
+        const originalHrefs = controls.map(control => control.getAttribute('href'));
+        const clicks = controls.map(() => 0);
+        controls.forEach((control, index) => {
+          control.addEventListener('click', event => {
+            event.preventDefault();
+            clicks[index]++;
+          });
+        });
+
+        const isVisibleWithin = element => {
+          const rect = element.getBoundingClientRect();
+          if (!(rect.width > 0 && rect.height > 0)) return false;
+          let visibleRect = {
+            top: rect.top,
+            right: rect.right,
+            bottom: rect.bottom,
+            left: rect.left
+          };
+          let current = element.parentElement;
+          while (current && current !== document.body) {
+            const style = getComputedStyle(current);
+            if (['hidden', 'clip'].includes(style.overflow)
+                || ['hidden', 'clip'].includes(style.overflowY)) {
+              const clipRect = current.getBoundingClientRect();
+              visibleRect = {
+                top: Math.max(visibleRect.top, clipRect.top),
+                right: Math.min(visibleRect.right, clipRect.right),
+                bottom: Math.min(visibleRect.bottom, clipRect.bottom),
+                left: Math.max(visibleRect.left, clipRect.left)
+              };
+            }
+            current = current.parentElement;
+          }
+          return visibleRect.right > visibleRect.left
+            && visibleRect.bottom > visibleRect.top;
+        };
+
+        try {
+          const context = scanner.createScanContext({ scope: 'smart', site: 'x' });
+          const candidates = scanner.collectPageCandidates('smart', {
+            context,
+            site: 'x'
+          });
+          const byId = new Map(candidates.map(candidate => [candidate.element.id, candidate]));
+
+          for (const expected of [
+            'x-auth-combined-for-you-label',
+            'x-auth-combined-following-label',
+            'x-auth-combined-profile-label',
+            'x-auth-combined-settings-label',
+            'x-auth-combined-messages-label',
+            'x-auth-combined-post-text'
+          ]) {
+            assert(byId.has(expected),
+              `combined authenticated X scan omitted ${expected}: `
+                + `${Array.from(byId.keys()).join(', ')}`);
+          }
+          for (const excluded of [
+            'x-auth-combined-profile-control',
+            'x-auth-combined-profile-badge',
+            'x-auth-combined-account',
+            'x-auth-combined-for-you-control'
+          ]) {
+            assert(!byId.has(excluded),
+              `combined authenticated X scan selected composite node ${excluded}`);
+          }
+
+          for (const id of [
+            'x-auth-combined-for-you-label',
+            'x-auth-combined-following-label',
+            'x-auth-combined-profile-label',
+            'x-auth-combined-settings-label',
+            'x-auth-combined-messages-label'
+          ]) {
+            const label = document.querySelector(`#${id}`);
+            const template = translationCore.buildInlineTemplate(label);
+            translationCore.createTranslationView(
+              label,
+              pseudoTranslate(template.text),
+              template,
+              { showOriginal: true }
+            );
+            const translation = label.querySelector(':scope > .oit-translation');
+            assert(translation, `translation DOM was not written for ${id}`);
+            assert(isVisibleWithin(label) && isVisibleWithin(translation),
+              `bilingual translation is clipped for ${id}`);
+          }
+
+          controls.forEach((control, index) => {
+            assert(control.isConnected, `translation replaced X control ${index}`);
+            assert(control.getAttribute('href') === originalHrefs[index],
+              `translation changed X control href ${index}`);
+            control.click();
+            assert(clicks[index] === 1,
+              `translation removed X control listener ${index}`);
+          });
+        } finally {
+          fixture.remove();
+        }
+      });
+
+      test('individual dynamic navigation labels resolve their shared cluster outside main', () => {
+        document.body.insertAdjacentHTML('beforeend', `
+          <main id="x-incremental-main" style="display:block;width:620px;min-height:180px">
+            <article>
+              <div id="x-incremental-post" data-testid="tweetText" lang="en" dir="auto">
+                Timeline content establishes the selected reading root.
+              </div>
+            </article>
+          </main>
+          <div id="x-incremental-rail"
+               style="display:block;width:230px;height:180px;overflow:hidden"></div>
+        `);
+        const rail = document.querySelector('#x-incremental-rail');
+        const context = scanner.createScanContext({ scope: 'smart', site: 'x' });
+        scanner.collectPageCandidates('smart', { context, site: 'x' });
+
+        const definitions = [
+          ['x-incremental-profile', '/alice', 'Profile'],
+          ['x-incremental-settings', '/settings', 'Settings'],
+          ['x-incremental-messages', '/messages', 'Messages']
+        ];
+        const controls = definitions.map(([id, href, label]) => {
+          const anchor = document.createElement('a');
+          anchor.id = `${id}-control`;
+          anchor.href = href;
+          anchor.setAttribute(
+            'style',
+            'display:flex;width:210px;height:38px;max-height:38px;overflow:hidden'
+          );
+          anchor.innerHTML = `<span id="${id}-label">${label}</span>`;
+          rail.append(anchor);
+          return anchor;
+        });
+
+        try {
+          const discovered = [];
+          for (const control of controls) {
+            const candidates = scanner.collectDynamicCandidates(control, 'smart', {
+              context,
+              site: 'x'
+            });
+            discovered.push(...candidates.map(candidate => candidate.element.id));
+          }
+
+          for (const [id] of definitions) {
+            assert(discovered.includes(`${id}-label`),
+              `individually rendered X navigation label was omitted: ${id}; `
+                + `discovered=${discovered.join(', ')}`);
+          }
+        } finally {
+          document.querySelector('#x-incremental-main')?.remove();
+          rail.remove();
+        }
+      });
+
+      test('identifier-free X shell translates visible labels but not clipped chrome or account identity', () => {
+        const fixture = document.createElement('div');
+        fixture.id = 'x-identifier-free-shell-fixture';
+        fixture.innerHTML = `
+          <div id="x-identifier-free-top"
+               style="display:flex;width:720px;height:48px;overflow:hidden">
+            <a id="x-identifier-free-home-control" href="/home"
+               style="display:flex;width:170px;height:38px;overflow:hidden">
+              <span style="display:none">Icon</span>
+              <div><div><span id="x-identifier-free-home-label">Home</span></div></div>
+              <span id="x-identifier-free-home-badge">7</span>
+            </a>
+            <a id="x-identifier-free-explore-control" href="/explore"
+               style="display:flex;width:170px;height:38px;overflow:hidden">
+              <span></span>
+              <div><span id="x-identifier-free-explore-label">Explore</span></div>
+            </a>
+            <a id="x-identifier-free-communities-control" href="/i/communities"
+               style="display:flex;width:210px;height:38px;overflow:hidden">
+              <span></span>
+              <div><span id="x-identifier-free-communities-label">Communities</span></div>
+            </a>
+          </div>
+          <div id="x-identifier-free-rail"
+               style="position:relative;display:block;width:250px;height:190px;overflow:hidden">
+            <a id="x-identifier-free-rail-home-control" href="/home"
+               style="display:flex;width:220px;height:38px;overflow:hidden">
+              <div><span id="x-identifier-free-rail-home-label">Home</span></div>
+            </a>
+            <a id="x-identifier-free-profile-control" href="/alice"
+               style="display:flex;width:220px;height:38px;overflow:hidden">
+              <div><span id="x-identifier-free-profile-label">Profile</span></div>
+            </a>
+            <a id="x-identifier-free-settings-control" href="/settings"
+               style="display:flex;width:220px;height:38px;overflow:hidden">
+              <div><span id="x-identifier-free-settings-label">Settings</span></div>
+              <kbd>G then S</kbd>
+            </a>
+            <button id="x-identifier-free-post-control" type="button"
+                    style="display:flex;width:220px;height:42px;overflow:hidden">
+              <div><span id="x-identifier-free-post-label">Post</span></div>
+            </button>
+            <a id="x-identifier-free-account-control" href="/alice"
+               style="display:flex;width:220px;height:42px;overflow:hidden">
+              <div><span id="x-identifier-free-account-name">Alice Example</span></div>
+              <span id="x-identifier-free-account-handle">@alice</span>
+            </a>
+            <a id="x-identifier-free-clipped-control" href="/jobs"
+               style="position:absolute;top:240px;left:0;display:flex;
+                      width:220px;height:38px;overflow:hidden">
+              <span id="x-identifier-free-clipped-label">Jobs</span>
+            </a>
+          </div>
+        `;
+        document.body.append(fixture);
+
+        try {
+          const context = scanner.createScanContext({ scope: 'smart', site: 'x' });
+          const candidates = scanner.collectPageCandidates('smart', {
+            context,
+            site: 'x'
+          });
+          const byId = new Map(candidates.map(candidate => [candidate.element.id, candidate]));
+
+          for (const expected of [
+            'x-identifier-free-home-label',
+            'x-identifier-free-explore-label',
+            'x-identifier-free-communities-label',
+            'x-identifier-free-rail-home-label',
+            'x-identifier-free-profile-label',
+            'x-identifier-free-settings-label',
+            'x-identifier-free-post-label'
+          ]) {
+            assert(byId.has(expected),
+              `identifier-free X shell omitted ${expected}: ${Array.from(byId.keys()).join(', ')}`);
+            assert(byId.get(expected)?.siteRole === 'navigation-label',
+              `${expected} did not retain X navigation semantics`);
+          }
+
+          for (const excluded of [
+            'x-identifier-free-home-badge',
+            'x-identifier-free-home-control',
+            'x-identifier-free-account-name',
+            'x-identifier-free-account-handle',
+            'x-identifier-free-account-control',
+            'x-identifier-free-clipped-label'
+          ]) {
+            assert(!byId.has(excluded),
+              `identifier-free X shell selected non-label or clipped content ${excluded}`);
+          }
+          assert(context.stats.adaptiveUiRootsFound >= 2,
+            'scanner did not report discovered adaptive X roots');
+          assert(context.stats.adaptiveUiRootSources['x:route-cluster'] >= 2,
+            `route-cluster roots were not attributed: `
+              + `${JSON.stringify(context.stats.adaptiveUiRootSources)}`);
+        } finally {
+          fixture.remove();
+        }
+      });
+
+      test('identifier-free X shell revealed after login is scanned as adaptive navigation', () => {
+        const wrapper = document.createElement('div');
+        wrapper.id = 'x-identifier-free-reveal-wrapper';
+        wrapper.hidden = true;
+        wrapper.innerHTML = `
+          <div id="x-identifier-free-reveal-top"
+               style="display:flex;width:720px;height:48px;overflow:hidden">
+            <a href="/home" style="display:flex;width:170px;height:38px">
+              <div><span id="x-identifier-free-reveal-home-label">Home</span></div>
+            </a>
+            <a href="/explore" style="display:flex;width:170px;height:38px">
+              <div><span id="x-identifier-free-reveal-explore-label">Explore</span></div>
+            </a>
+            <a href="/notifications" style="display:flex;width:190px;height:38px">
+              <div><span id="x-identifier-free-reveal-notifications-label">
+                Notifications
+              </span></div>
+            </a>
+          </div>
+          <div id="x-identifier-free-reveal-rail"
+               style="display:block;width:230px;height:190px;overflow:hidden">
+            <a href="/home" style="display:flex;width:210px;height:38px">
+              <div><span id="x-identifier-free-reveal-rail-home-label">Home</span></div>
+            </a>
+            <a href="/alice" style="display:flex;width:210px;height:38px">
+              <div><span id="x-identifier-free-reveal-profile-label">Profile</span></div>
+            </a>
+            <a href="/settings" style="display:flex;width:210px;height:38px">
+              <div><span id="x-identifier-free-reveal-settings-label">Settings</span></div>
+            </a>
+          </div>
+        `;
+        document.body.append(wrapper);
+
+        try {
+          const context = scanner.createScanContext({ scope: 'smart', site: 'x' });
+          scanner.collectPageCandidates('smart', { context, site: 'x' });
+
+          wrapper.hidden = false;
+          const ids = scanner.collectDynamicCandidates(wrapper, 'smart', {
+            context,
+            site: 'x'
+          }).map(candidate => candidate.element.id).filter(Boolean);
+
+          for (const expected of [
+            'x-identifier-free-reveal-home-label',
+            'x-identifier-free-reveal-explore-label',
+            'x-identifier-free-reveal-notifications-label',
+            'x-identifier-free-reveal-rail-home-label',
+            'x-identifier-free-reveal-profile-label',
+            'x-identifier-free-reveal-settings-label'
+          ]) {
+            assert(ids.includes(expected),
+              `revealed identifier-free X shell omitted ${expected}: ${ids.join(', ')}`);
+          }
+        } finally {
+          wrapper.remove();
+        }
+      });
+
+      const failures = [];
+      for (const item of tests) {
+        try {
+          item.fn();
+        } catch (error) {
+          failures.push({ name: item.name, error: error.stack || error.message });
+        }
+      }
+      return { total: tests.length, failures };
+    };
+  </script>
+</body>
+</html>

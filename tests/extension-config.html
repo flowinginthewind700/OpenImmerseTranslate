@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Extension config browser tests</title>
+</head>
+<body>
+  <script src="../shared/prompt-policy.js"></script>
+  <script src="../shared/translation-core.js"></script>
+  <script src="../shared/providers.js"></script>
+  <script src="../shared/extension-config.js"></script>
+  <script>
+    window.runExtensionConfigTests = async () => {
+      const api = window.OITExtensionConfig;
+      const tests = [];
+      const assert = (condition, message) => {
+        if (!condition) throw new Error(message);
+      };
+      const test = (name, fn) => tests.push({ name, fn });
+
+      test('merges the selected provider with saved settings and clamps limits', () => {
+        const config = api.buildRuntimeConfig({
+          globalConfig: {
+            provider: 'openai',
+            sourceLang: 'ja',
+            targetLang: 'fr',
+            maxConcurrent: 99,
+          },
+          providerConfigs: {
+            openai: {
+              endpoint: 'https://proxy.example/v1/chat/completions',
+              model: 'translation-model',
+              apiKey: 'secret',
+            },
+          },
+          providerDefaults: window.OITProviders.PROVIDER_DEFAULTS,
+        });
+
+        assert(config.provider === 'openai', 'saved provider was ignored');
+        assert(config.apiEndpoint === 'https://proxy.example/v1/chat/completions',
+          'saved endpoint was ignored');
+        assert(config.modelName === 'translation-model', 'saved model was ignored');
+        assert(config.sourceLang === 'ja' && config.targetLang === 'fr',
+          'language settings were not preserved');
+        assert(config.maxConcurrent === 12, 'concurrency limit was not clamped');
+      });
+
+      test('loads sync storage and applies explicit session overrides', async () => {
+        const calls = [];
+        const storage = {
+          async get(keys) {
+            calls.push(keys);
+            return {
+              globalConfig: { provider: 'deepseek', targetLang: 'zh-TW' },
+              providerConfigs: {
+                deepseek: { apiKey: 'stored-key' },
+              },
+            };
+          },
+        };
+        const config = await api.loadRuntimeConfig(storage, {
+          providerDefaults: window.OITProviders.PROVIDER_DEFAULTS,
+          overrides: { targetLang: 'en' },
+        });
+
+        assert(calls.length === 1, 'configuration storage was not loaded exactly once');
+        assert(config.provider === 'deepseek', 'stored provider was not selected');
+        assert(config.apiKey === 'stored-key', 'stored API key was not loaded');
+        assert(config.apiEndpoint.includes('api.deepseek.com'),
+          'provider endpoint default was not applied');
+        assert(config.targetLang === 'en', 'session override was not applied');
+      });
+
+      test('uses provider capability rules to detect incomplete configuration', () => {
+        const defaults = window.OITProviders.PROVIDER_DEFAULTS;
+        const google = api.buildRuntimeConfig({
+          globalConfig: { provider: 'google' },
+          providerDefaults: defaults,
+        });
+        const ollama = api.buildRuntimeConfig({
+          globalConfig: { provider: 'ollama' },
+          providerDefaults: defaults,
+        });
+        const custom = api.buildRuntimeConfig({
+          globalConfig: { provider: 'custom' },
+          providerDefaults: defaults,
+        });
+
+        assert(api.isProviderConfigured(google, defaults), 'Google should work without a key');
+        assert(api.isProviderConfigured(ollama, defaults), 'Ollama should work without a key');
+        assert(!api.isProviderConfigured(custom, defaults), 'empty custom provider was accepted');
+      });
+
+      test('falls back to Google for an unknown saved provider', () => {
+        const config = api.buildRuntimeConfig({
+          globalConfig: { provider: 'removed-provider' },
+          providerDefaults: window.OITProviders.PROVIDER_DEFAULTS,
+        });
+
+        assert(config.provider === 'google', 'unknown provider did not fall back safely');
+        assert(config.apiEndpoint === '', 'Google received a stale API endpoint');
+      });
+
+      const failures = [];
+      for (const item of tests) {
+        try {
+          await item.fn();
+        } catch (error) {
+          failures.push({ name: item.name, error: error.stack || error.message });
+        }
+      }
+      return { total: tests.length, failures };
+    };
+  </script>
+</body>
+</html>

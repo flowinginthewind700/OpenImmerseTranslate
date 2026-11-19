@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Translation retry policy tests</title>
+</head>
+<body>
+  <script src="../shared/translation-retry-policy.js"></script>
+  <script>
+    window.runTranslationRetryPolicyTests = () => {
+      const tests = [];
+      const assert = (condition, message) => {
+        if (!condition) throw new Error(message);
+      };
+      const test = (name, fn) => tests.push({ name, fn });
+
+      test('new elements are immediately eligible', () => {
+        const policy = new window.OITTranslationRetryPolicy();
+        const element = document.createElement('p');
+        const status = policy.getStatus(element, 'source text', 1000);
+        assert(status.allowed, 'new content was not eligible');
+        assert(status.attempts === 0, 'new content had a stale attempt count');
+      });
+
+      test('failures enter a cooldown and become eligible after its deadline', () => {
+        const policy = new window.OITTranslationRetryPolicy({
+          maxAttempts: 2,
+          cooldownMs: 1000
+        });
+        const element = document.createElement('p');
+        const failure = policy.recordFailure(element, 'source text', 1000);
+        assert(failure.attempts === 1, 'first failure was not recorded');
+        assert(failure.retryAfter === 2000, 'first retry deadline was incorrect');
+
+        const coolingDown = policy.getStatus(element, 'source text', 1500);
+        assert(!coolingDown.allowed && coolingDown.reason === 'cooldown',
+          'cooling-down content was eligible too early');
+        assert(policy.getStatus(element, 'source text', 2000).allowed,
+          'content did not become eligible at its retry deadline');
+      });
+
+      test('automatic retries are bounded and source changes reset the budget', () => {
+        const policy = new window.OITTranslationRetryPolicy({
+          maxAttempts: 2,
+          cooldownMs: 1000
+        });
+        const element = document.createElement('p');
+        policy.recordFailure(element, 'first source', 1000);
+        policy.recordFailure(element, 'first source', 2000);
+
+        const exhausted = policy.getStatus(element, 'first source', 100000);
+        assert(!exhausted.allowed && exhausted.reason === 'exhausted',
+          'automatic retries were not bounded');
+        assert(policy.getStatus(element, 'changed source', 100000).allowed,
+          'changed source did not reset the failure budget');
+      });
+
+      test('a successful translation clears prior failure state', () => {
+        const policy = new window.OITTranslationRetryPolicy();
+        const element = document.createElement('p');
+        policy.recordFailure(element, 'source text', 1000);
+        policy.recordSuccess(element);
+        const status = policy.getStatus(element, 'source text', 1000);
+        assert(status.allowed && status.attempts === 0,
+          'success did not clear the failure record');
+      });
+
+      const failures = [];
+      for (const item of tests) {
+        try {
+          item.fn();
+        } catch (error) {
+          failures.push({ name: item.name, error: error.stack || error.message });
+        }
+      }
+      return { total: tests.length, failures };
+    };
+  </script>
+</body>
+</html>

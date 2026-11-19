@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Model policy browser tests</title>
+</head>
+<body>
+  <script src="../shared/model-policy.js"></script>
+  <script>
+    window.runModelPolicyTests = () => {
+      const policy = window.OITModelPolicy;
+      const tests = [];
+      const assert = (condition, message) => {
+        if (!condition) throw new Error(message);
+      };
+      const test = (name, fn) => tests.push({ name, fn });
+
+      test('provider inference uses known endpoints before falling back to the configured provider', () => {
+        assert(policy.inferProvider({
+          provider: 'custom',
+          apiEndpoint: 'https://api.openai.com/v1/chat/completions'
+        }) === 'openai', 'OpenAI endpoint was not inferred');
+        assert(policy.inferProvider({
+          provider: 'custom',
+          apiEndpoint: 'https://api.anthropic.com/v1/messages'
+        }) === 'anthropic', 'Anthropic endpoint was not inferred');
+        assert(policy.inferProvider({
+          provider: 'custom',
+          apiEndpoint: 'https://api.deepseek.com/v1/chat/completions'
+        }) === 'deepseek', 'DeepSeek endpoint was not inferred');
+        assert(policy.inferProvider({
+          provider: 'custom',
+          apiEndpoint: 'https://api.moonshot.cn/v1/chat/completions'
+        }) === 'moonshot', 'Moonshot endpoint was not inferred');
+        assert(policy.inferProvider({
+          provider: 'custom',
+          apiEndpoint: 'http://localhost:11434/api/chat'
+        }) === 'ollama', 'Ollama endpoint was not inferred');
+        assert(policy.inferProvider({
+          provider: 'custom',
+          apiEndpoint: 'https://gateway.example/v1/chat/completions'
+        }) === 'custom', 'unknown endpoint discarded the configured provider');
+      });
+
+      test('GPT-5 and o-series requests omit temperature and use completion token limits', () => {
+        for (const model of ['gpt-5', 'gpt-5-mini', 'o3', 'o4-mini']) {
+          const request = policy.buildOpenAICompatibleRequest({
+            provider: 'openai',
+            apiEndpoint: 'https://api.openai.com/v1/chat/completions',
+            apiKey: 'secret',
+            modelName: model,
+            maxTokens: 1234,
+            temperature: 0.3
+          }, 'system', 'user');
+
+          assert(!('temperature' in request.body),
+            `${model} unexpectedly included temperature`);
+          assert(request.body.max_completion_tokens === 1234,
+            `${model} did not use max_completion_tokens`);
+          assert(!('max_tokens' in request.body),
+            `${model} included unsupported max_tokens`);
+          assert(request.body.model === model, `${model} model name changed`);
+        }
+      });
+
+      test('ordinary compatible models retain bounded temperature', () => {
+        const request = policy.buildOpenAICompatibleRequest({
+          provider: 'openai',
+          apiEndpoint: 'https://api.openai.com/v1/chat/completions',
+          apiKey: 'secret',
+          modelName: 'gpt-4o-mini',
+          maxTokens: 1024,
+          temperature: 1.8
+        }, 'system', 'user');
+
+        assert(request.body.temperature === 1, 'temperature was not clamped');
+        assert(request.body.max_tokens === 1024, 'max_tokens was not preserved');
+      });
+
+      test('OpenAI Responses endpoints use the native request envelope', () => {
+        const request = policy.buildOpenAICompatibleRequest({
+          provider: 'openai',
+          apiEndpoint: 'https://api.openai.com/v1/responses',
+          apiKey: 'secret',
+          modelName: 'gpt-5-mini',
+          maxTokens: 1536,
+          temperature: 0.2
+        }, 'system', 'user');
+
+        assert(request.body.instructions === 'system',
+          'Responses request omitted instructions');
+        assert(request.body.input === 'user',
+          'Responses request omitted input');
+        assert(request.body.max_output_tokens === 1536,
+          'Responses request did not use max_output_tokens');
+        assert(!('messages' in request.body) && !('max_tokens' in request.body),
+          'Responses request retained Chat Completions fields');
+        assert(!('temperature' in request.body),
+          'reasoning Responses request included unsupported temperature');
+      });
+
+      test('thinking-capable compatible models receive explicit disable flags', () => {
+        const deepseek = policy.buildOpenAICompatibleRequest({
+          provider: 'deepseek',
+          apiEndpoint: 'https://api.deepseek.com/v1/chat/completions',
+          modelName: 'deepseek-reasoner'
+        }, 'system', 'user');
+        const kimi = policy.buildOpenAICompatibleRequest({
+          provider: 'moonshot',
+          apiEndpoint: 'https://api.moonshot.cn/v1/chat/completions',
+          modelName: 'kimi-k2-thinking'
+        }, 'system', 'user');
+        const glm = policy.buildOpenAICompatibleRequest({
+          provider: 'zhipu',
+          apiEndpoint: 'https://open.bigmodel.cn/api/paas/v4/chat/completions',
+          modelName: 'glm-4.5'
+        }, 'system', 'user');
+
+        assert(deepseek.body.thinking?.type === 'disabled',
+          'DeepSeek thinking disable flag is missing');
+        assert(kimi.body.thinking?.type === 'disabled',
+          'Kimi thinking disable flag is missing');
+        assert(glm.body.thinking?.type === 'disabled',
+          'GLM thinking disable flag is missing');
+      });
+
+      test('Anthropic and Ollama requests use native body formats', () => {
+        const anthropic = policy.buildAnthropicRequest({
+          provider: 'anthropic',
+          apiEndpoint: 'https://api.anthropic.com/v1/messages',
+          apiKey: 'secret',
+          modelName: 'claude-3-5-sonnet-latest',
+          maxTokens: 2048,
+          temperature: 0.2
+        }, 'system', 'user');
+        const ollama = policy.buildOllamaRequest({
+          provider: 'ollama',
+          apiEndpoint: 'http://localhost:11434/api/chat',
+          modelName: 'qwen3',
+          temperature: 0.2
+        }, 'system', 'user');
+
+        assert(anthropic.body.system === 'system', 'Anthropic system prompt missing');
+        assert(anthropic.body.messages[0].content === 'user', 'Anthropic user message missing');
+        assert(!('thinking' in anthropic.body), 'Anthropic thinking was not disabled');
+        assert(ollama.body.stream === false, 'Ollama request must be non-streaming');
+        assert(ollama.body.options.temperature === 0.2, 'Ollama temperature missing');
+      });
+
+      test('provider response parsing handles modern OpenAI, Anthropic, and Ollama shapes', () => {
+        assert(policy.parseProviderResponse('openai', {
+          choices: [{ message: { content: 'compatible' } }]
+        }) === 'compatible', 'OpenAI-compatible response was not parsed');
+        assert(policy.parseProviderResponse('openai', {
+          output_text: 'responses api'
+        }) === 'responses api', 'Responses API output_text was not parsed');
+        assert(policy.parseProviderResponse('anthropic', {
+          content: [{ type: 'text', text: 'claude' }]
+        }) === 'claude', 'Anthropic response was not parsed');
+        assert(policy.parseProviderResponse('ollama', {
+          message: { content: 'local' }
+        }) === 'local', 'Ollama response was not parsed');
+      });
+
+      test('Responses API output arrays combine all text blocks in order', () => {
+        const content = policy.parseProviderResponse('openai', {
+          output: [
+            {
+              content: [
+                { type: 'output_text', text: 'first ' },
+                { type: 'output_text', text: 'second' }
+              ]
+            },
+            {
+              content: [
+                { type: 'output_text', text: ' third' }
+              ]
+            }
+          ]
+        });
+
+        assert(content === 'first second third',
+          `Responses API compound output was parsed as ${JSON.stringify(content)}`);
+      });
+
+      test('empty and error response envelopes fail closed as empty text', () => {
+        for (const provider of ['openai', 'anthropic', 'ollama']) {
+          assert(policy.parseProviderResponse(provider, null) === '',
+            `${provider} null response did not fail closed`);
+          assert(policy.parseProviderResponse(provider, {
+            error: { message: 'provider unavailable' }
+          }) === '', `${provider} error response was treated as translation text`);
+        }
+      });
+
+      const failures = [];
+      for (const item of tests) {
+        try {
+          item.fn();
+        } catch (error) {
+          failures.push({ name: item.name, error: error.stack || error.message });
+        }
+      }
+      return { total: tests.length, failures };
+    };
+  </script>
+</body>
+</html>

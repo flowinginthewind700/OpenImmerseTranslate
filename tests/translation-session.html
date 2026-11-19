@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Translation session browser tests</title>
+</head>
+<body>
+  <script src="../shared/translation-session.js"></script>
+  <script>
+    window.runTranslationSessionTests = () => {
+      const tests = [];
+      const assert = (condition, message) => {
+        if (!condition) throw new Error(message);
+      };
+      const test = (name, fn) => tests.push({ name, fn });
+
+      test('a started session exposes scanning and translating phases', () => {
+        const session = new OITTranslationSession({ now: () => 100 });
+        let phaseEvents = [];
+        session.subscribe(snapshot => phaseEvents.push(snapshot.phase));
+
+        session.start();
+        assert(session.snapshot().phase === 'scanning',
+          'started session did not enter scanning');
+        assert(session.snapshot().pipelineBusy,
+          'started session was not busy');
+
+        session.markActivity(200);
+        const translating = session.snapshot();
+        assert(translating.phase === 'translating',
+          'activity did not enter translating');
+        assert(translating.sessionActive && translating.pipelineBusy,
+          'translating session did not expose active work');
+        assert(translating.lastActivityAt === 200,
+          'activity timestamp was not updated');
+        assert(phaseEvents.join(',') === 'scanning,translating',
+          'phase transitions were not observable');
+      });
+
+      test('a successful settle ends busy UI state while retaining dynamic observation', () => {
+        const session = new OITTranslationSession({ now: () => 100 });
+        session.start();
+        session.markActivity(110);
+        const settled = session.settle({
+          translatedCount: 4,
+          failedRequestCount: 0
+        }, 300);
+
+        assert(settled.phase === 'completed',
+          'successful session did not enter completed');
+        assert(settled.sessionActive,
+          'completed session stopped observing dynamic content');
+        assert(!settled.pipelineBusy,
+          'completed session remained busy');
+        assert(settled.lastError === null,
+          'successful session retained an error');
+        assert(settled.translatedCount === 4 && settled.failedRequestCount === 0,
+          'settled counters were not retained');
+      });
+
+      test('provider failure remains recoverable without leaving the spinner active', () => {
+        const session = new OITTranslationSession({ now: () => 100 });
+        session.start();
+        session.markActivity(110);
+        const failed = session.settle({
+          translatedCount: 0,
+          failedRequestCount: 2,
+          error: 'provider unavailable'
+        }, 300);
+
+        assert(failed.phase === 'failed',
+          'provider failure did not enter failed');
+        assert(failed.sessionActive,
+          'provider failure stopped dynamic observation');
+        assert(!failed.pipelineBusy,
+          'provider failure left the loading state active');
+        assert(failed.lastError === 'provider unavailable',
+          'provider failure was not retained for diagnostic recovery');
+      });
+
+      test('candidate-free pages settle as a failed no-content outcome', () => {
+        const session = new OITTranslationSession();
+        session.start();
+        const settled = session.settle({
+          translatedCount: 0,
+          failedRequestCount: 0
+        });
+
+        assert(settled.phase === 'failed',
+          'candidate-free page did not settle as failed');
+        assert(!settled.pipelineBusy,
+          'candidate-free page remained busy');
+        assert(settled.lastError === 'No translatable page content was found',
+          'candidate-free page did not expose a diagnostic reason');
+      });
+
+      test('new activity reopens a settled pipeline and stop resets it', () => {
+        const session = new OITTranslationSession();
+        session.start();
+        session.settle({ translatedCount: 1 });
+        session.markActivity();
+
+        assert(session.snapshot().phase === 'translating',
+          'new dynamic content did not reopen the pipeline');
+        assert(session.snapshot().pipelineBusy,
+          'new dynamic content did not mark the pipeline busy');
+
+        const stopped = session.stop();
+        assert(stopped.phase === 'stopped',
+          'stop did not enter the stopped phase');
+        assert(!stopped.sessionActive && !stopped.pipelineBusy,
+          'stopped session still reported active work');
+
+        const idle = session.reset();
+        assert(idle.phase === 'idle'
+            && !idle.sessionActive
+            && !idle.pipelineBusy,
+        'reset did not return the session to idle');
+      });
+
+      const failures = [];
+      for (const item of tests) {
+        try {
+          item.fn();
+        } catch (error) {
+          failures.push({ name: item.name, error: error.stack || error.message });
+        }
+      }
+      return { total: tests.length, failures };
+    };
+  </script>
+</body>
+</html>

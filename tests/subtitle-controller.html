@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Subtitle controller browser tests</title>
+</head>
+<body>
+  <script src="../shared/subtitle-core.js"></script>
+  <script src="../shared/subtitle-controller.js"></script>
+  <script>
+    window.runSubtitleControllerTests = async () => {
+      const core = window.OITSubtitleCore;
+      const controllerApi = window.OITSubtitleController;
+      const tests = [];
+      const assert = (condition, message) => {
+        if (!condition) throw new Error(message);
+      };
+      const test = (name, fn) => tests.push({ name, fn });
+
+      test('translates bounded batches sequentially and reports progress', async () => {
+        const segments = Array.from({ length: 5 }, (_, index) => ({
+          id: `segment-${index}`,
+          sourceText: `source ${index}`,
+          translatedText: '',
+        }));
+        const calls = [];
+        const progress = [];
+        const controller = controllerApi.createSubtitleTranslationController({
+          createBatches: items => core.createTranslationBatches(items, {
+            maxItems: 2,
+            maxCharacters: 100,
+          }),
+          translateBatch: async (texts, details) => {
+            calls.push({ texts, details });
+            return texts.map(text => `译文 ${text}`);
+          },
+          onProgress: event => progress.push(event),
+        });
+
+        const result = await controller.translate(segments);
+
+        assert(calls.length === 3, `expected 3 batches, got ${calls.length}`);
+        assert(calls.every(call => call.texts.length <= 2), 'item budget was exceeded');
+        assert(result.translatedCount === 5, 'not all segments were translated');
+        assert(result.segments[4].translatedText === '译文 source 4',
+          'translation was mapped to the wrong segment');
+        assert(segments.every(segment => segment.translatedText === ''),
+          'controller mutated its input');
+        assert(progress.filter(event => event.type === 'batch-complete').length === 3,
+          'per-batch progress was not reported');
+        assert(progress.at(-1).type === 'complete', 'completion was not reported');
+      });
+
+      test('continues after a failed batch and exposes partial results', async () => {
+        const segments = Array.from({ length: 4 }, (_, index) => ({
+          id: `segment-${index}`,
+          sourceText: `source ${index}`,
+          translatedText: '',
+        }));
+        const failures = [];
+        const controller = controllerApi.createSubtitleTranslationController({
+          createBatches: items => core.createTranslationBatches(items, {
+            maxItems: 2,
+            maxCharacters: 100,
+          }),
+          translateBatch: async (texts, details) => {
+            if (details.batchIndex === 1) throw new Error('provider unavailable');
+            return texts.map(text => `译文 ${text}`);
+          },
+          continueOnError: true,
+          onBatchError: event => failures.push(event),
+        });
+
+        const result = await controller.translate(segments);
+
+        assert(result.translatedCount === 2, 'successful batch was discarded');
+        assert(result.failures.length === 1, 'batch failure was not recorded');
+        assert(failures.length === 1 && failures[0].batchIndex === 1,
+          'batch error event exposed the wrong batch');
+        assert(result.segments[2].translatedText === '',
+          'failed segments received fabricated translations');
+        assert(result.completedBatches === 1 && result.processedBatches === 2,
+          'completed and processed batch counts are incorrect');
+      });
+
+      test('cancels an in-flight request and leaves remaining batches untouched', async () => {
+        const segments = Array.from({ length: 4 }, (_, index) => ({
+          id: `segment-${index}`,
+          sourceText: `source ${index}`,
+          translatedText: '',
+        }));
+        const pending = new Map();
+        let calls = 0;
+        const controller = controllerApi.createSubtitleTranslationController({
+          createBatches: items => core.createTranslationBatches(items, {
+            maxItems: 2,
+            maxCharacters: 100,
+          }),
+          translateBatch: (texts, details) => {
+            calls++;
+            return new Promise((resolve, reject) => {
+              pending.set(details.requestId, { reject, resolve, texts });
+            });
+          },
+          abortRequest: requestId => {
+            const request = pending.get(requestId);
+            if (!request) return false;
+            const error = new Error('cancelled');
+            error.name = 'AbortError';
+            request.reject(error);
+            return true;
+          },
+        });
+
+        const translation = controller.translate(segments);
+        while (pending.size === 0) {
+          await new Promise(resolve => setTimeout(resolve, 0));
+        }
+        controller.cancel('user');
+        const result = await translation;
+
+        assert(result.cancelled, 'cancelled run was reported as successful');
+        assert(calls === 1, 'controller started another batch after cancellation');
+        assert(result.translatedCount === 0, 'cancelled batch was counted as translated');
+      });
+
+      test('rejects malformed batch responses instead of shifting translations', async () => {
+        const segments = [
+          { id: 'one', sourceText: 'one', translatedText: '' },
+          { id: 'two', sourceText: 'two', translatedText: '' },
+        ];
+        const controller = controllerApi.createSubtitleTranslationController({
+          createBatches: items => [items],
+          translateBatch: async () => ['only one translation'],
+        });
+
+        let error = null;
+        try {
+          await controller.translate(segments);
+        } catch (caught) {
+          error = caught;
+        }
+
+        assert(error && /result count/i.test(error.message),
+          'malformed batch result was accepted');
+        assert(segments.every(segment => segment.translatedText === ''),
+          'malformed response changed source segments');
+      });
+
+      test('treats a transport AbortError as cancellation', async () => {
+        const segments = [
+          { id: 'one', sourceText: 'one', translatedText: '' },
+          { id: 'two', sourceText: 'two', translatedText: '' },
+        ];
+        const controller = controllerApi.createSubtitleTranslationController({
+          createBatches: items => [items],
+          translateBatch: async () => {
+            throw controllerApi.createAbortError('transport aborted');
+          },
+          continueOnError: true,
+        });
+
+        const result = await controller.translate(segments);
+
+        assert(result.cancelled, 'transport AbortError was reported as a normal failure');
+        assert(result.failures.length === 0, 'cancellation was recorded as a batch failure');
+        assert(result.translatedCount === 0, 'cancelled transport translated a segment');
+      });
+
+      test('cancel remains safe when abort transport integration throws', async () => {
+        const pending = new Map();
+        const controller = controllerApi.createSubtitleTranslationController({
+          createBatches: items => [items],
+          translateBatch: (texts, details) => new Promise((resolve, reject) => {
+            pending.set(details.requestId, { reject, resolve, texts });
+            details.signal.addEventListener('abort', () => {
+              reject(controllerApi.createAbortError('aborted by signal'));
+            }, { once: true });
+          }),
+          abortRequest: () => {
+            throw new Error('runtime messaging unavailable');
+          },
+        });
+
+        const translation = controller.translate([
+          { id: 'one', sourceText: 'one', translatedText: '' },
+        ]);
+        while (pending.size === 0) {
+          await new Promise(resolve => setTimeout(resolve, 0));
+        }
+
+        let thrown = null;
+        try {
+          controller.cancel('user');
+        } catch (error) {
+          thrown = error;
+        }
+        const result = await translation;
+
+        assert(thrown === null, 'cancel leaked a transport integration exception');
+        assert(result.cancelled, 'controller did not stop after cancel');
+      });
+
+      const failures = [];
+      for (const item of tests) {
+        try {
+          await item.fn();
+        } catch (error) {
+          failures.push({ name: item.name, error: error.stack || error.message });
+        }
+      }
+      return { total: tests.length, failures };
+    };
+  </script>
+</body>
+</html>

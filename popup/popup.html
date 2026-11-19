@@ -15,7 +15,10 @@
         <svg class="logo-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
           <path d="M12.87 15.07l-2.54-2.51.03-.03A17.52 17.52 0 0014.07 6H17V4h-7V2H8v2H1v2h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11.76-2.04zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2l-4.5-12zm-2.62 7l1.62-4.33L19.12 17h-3.24z" fill="currentColor"/>
         </svg>
-        <span class="logo-text" data-i18n="appName">Open Immerse</span>
+        <div class="logo-copy">
+          <span class="logo-text" data-i18n="appName">Open Immerse</span>
+          <span class="extension-version" id="extensionVersion">v...</span>
+        </div>
       </div>
       <div class="header-actions">
         <select class="lang-select" id="langSelect" title="Language">
@@ -59,6 +62,12 @@
             <path d="M12.87 15.07l-2.54-2.51.03-.03A17.52 17.52 0 0014.07 6H17V4h-7V2H8v2H1v2h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11.76-2.04zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2l-4.5-12zm-2.62 7l1.62-4.33L19.12 17h-3.24z" fill="currentColor"/>
           </svg>
           <span data-i18n="translatePage">翻译当前页面</span>
+        </button>
+        <button class="action-btn secondary" id="subtitleBtn">
+          <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M4 5h16a2 2 0 012 2v10a2 2 0 01-2 2H4a2 2 0 01-2-2V7a2 2 0 012-2zm1 4v2h6V9H5zm0 4v2h4v-2H5zm6 0v2h7v-2h-7z" fill="currentColor"/>
+          </svg>
+          <span data-i18n="subtitleReader">翻译字幕文件</span>
         </button>
         <button class="action-btn secondary" id="stopTranslateBtn" style="display: none;">
           <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -295,6 +304,14 @@
             </select>
           </div>
 
+          <div class="form-group">
+            <label class="form-label" data-i18n="translationScope">翻译范围</label>
+            <select class="form-select" id="translationScope">
+              <option value="smart" data-i18n="scopeSmart">智能范围 - 聚焦正文</option>
+              <option value="full" data-i18n="scopeFull">全页范围 - 包含导航与控件</option>
+            </select>
+          </div>
+
           <div class="form-group checkbox-group">
             <label class="checkbox-label">
               <input type="checkbox" id="showOriginal" checked>
@@ -350,7 +367,10 @@
     </div>
   </div>
 
+  <script src="../shared/prompt-policy.js"></script>
+  <script src="../shared/translation-core.js"></script>
   <script src="../shared/providers.js"></script>
+  <script src="../shared/content-script-injection.js"></script>
   <script src="popup.js" type="module"></script>
 </body>
 </html>

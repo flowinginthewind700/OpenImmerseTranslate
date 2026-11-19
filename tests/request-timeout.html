@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Request timeout browser tests</title>
+</head>
+<body>
+  <script src="../shared/request-timeout.js"></script>
+  <script>
+    window.runRequestTimeoutTests = async () => {
+      const timeoutApi = window.OITRequestTimeout;
+      const tests = [];
+      const assert = (condition, message) => {
+        if (!condition) throw new Error(message);
+      };
+      const test = (name, fn) => tests.push({ name, fn });
+      const rejectionWithin = async (factory, timeoutMs, message) => {
+        let timer = null;
+        try {
+          return await Promise.race([
+            Promise.resolve().then(factory),
+            new Promise((_, reject) => {
+              timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+            })
+          ]);
+        } catch (error) {
+          return error;
+        } finally {
+          if (timer !== null) clearTimeout(timer);
+        }
+      };
+
+      test('a hung task rejects with TimeoutError and aborts its owned signal', async () => {
+        let ownedSignal = null;
+        const error = await rejectionWithin(
+          () => timeoutApi.withTimeout(signal => {
+            ownedSignal = signal;
+            return new Promise(() => {});
+          }, { timeoutMs: 40 }),
+          300,
+          'hung task did not settle after its timeout'
+        );
+
+        assert(error.name === 'TimeoutError',
+          `hung task rejected as ${error.name} instead of TimeoutError`);
+        assert(ownedSignal?.aborted === true,
+          'timed-out task-owned signal was not aborted');
+      });
+
+      test('caller cancellation remains AbortError', async () => {
+        const caller = new AbortController();
+        const pending = timeoutApi.withTimeout(signal => (
+          new Promise((_, reject) => {
+            signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+          })
+        ), {
+          timeoutMs: 500,
+          signal: caller.signal
+        });
+        setTimeout(() => caller.abort(), 10);
+
+        const error = await rejectionWithin(
+          () => pending,
+          300,
+          'caller cancellation did not settle the task'
+        );
+        assert(error.name === 'AbortError',
+          `caller cancellation rejected as ${error.name} instead of AbortError`);
+      });
+
+      test('an already-cancelled caller never starts the task', async () => {
+        const caller = new AbortController();
+        caller.abort();
+        let calls = 0;
+        const error = await rejectionWithin(
+          () => timeoutApi.withTimeout(() => {
+            calls++;
+            return 'unexpected';
+          }, {
+            timeoutMs: 100,
+            signal: caller.signal
+          }),
+          300,
+          'pre-cancelled task did not reject'
+        );
+
+        assert(error.name === 'AbortError',
+          `pre-cancelled task rejected as ${error.name} instead of AbortError`);
+        assert(calls === 0, 'pre-cancelled caller invoked the task');
+      });
+
+      test('task failures pass through unchanged and clear the timeout lifecycle', async () => {
+        const expected = new Error('provider failed');
+        const error = await rejectionWithin(
+          () => timeoutApi.withTimeout(() => {
+            throw expected;
+          }, { timeoutMs: 20 }),
+          300,
+          'task failure did not propagate'
+        );
+
+        assert(error === expected, 'task failure was replaced by another error');
+      });
+
+      const failures = [];
+      for (const item of tests) {
+        try {
+          await item.fn();
+        } catch (error) {
+          failures.push({ name: item.name, error: error.stack || error.message });
+        }
+      }
+      return { total: tests.length, failures };
+    };
+  </script>
+</body>
+</html>

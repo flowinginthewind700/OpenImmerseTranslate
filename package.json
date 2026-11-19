@@ -1,11 +1,16 @@
 {
   "name": "open-immerse-translate",
-  "version": "1.6.13",
+  "version": "1.6.14",
   "description": "开源沉浸式翻译Chrome插件 - 支持自定义LLM API的双语对照翻译工具",
   "private": true,
   "scripts": {
     "build": "node scripts/build.js",
     "icons": "node scripts/generate-icons.js",
+    "test": "npm run test:browser && npm run test:extension",
+    "test:browser": "python3 tests/browser-kernel-test.py",
+    "test:extension": "npm run build && python3 tests/extension-load-test.py",
+    "test:e2e:x": "npm run build && python3 tests/extension-load-test.py --x-e2e",
+    "test:e2e:x:google": "npm run build && python3 tests/extension-load-test.py --x-google-e2e",
     "dev": "echo '请在Chrome扩展页面(chrome://extensions/)加载本项目文件夹'"
   },
   "keywords": [
@@ -21,4 +26,3 @@
     "sharp": "^0.33.0"
   }
 }
-

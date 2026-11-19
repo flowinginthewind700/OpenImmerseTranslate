@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Rate limiter browser tests</title>
+</head>
+<body>
+  <script src="../background/rate-limiter.js"></script>
+  <script>
+    window.runRateLimiterTests = async () => {
+      const api = window.OITRateLimiter;
+      const tests = [];
+      const assert = (condition, message) => {
+        if (!condition) throw new Error(message);
+      };
+      const test = (name, fn) => tests.push({ name, fn });
+      const expectRejection = async (promise, message) => {
+        try {
+          await promise;
+        } catch (error) {
+          return error;
+        }
+        throw new Error(message);
+      };
+      const flushMicrotasks = () => Promise.resolve().then(() => Promise.resolve());
+
+      test('concurrency limits queue excess work until a slot is released', async () => {
+        const limiter = new api.RateLimiter(2, 0);
+        await limiter.acquire();
+        await limiter.acquire();
+        let thirdGranted = false;
+        const third = limiter.acquire().then(() => {
+          thirdGranted = true;
+        });
+
+        await flushMicrotasks();
+        assert(!thirdGranted, 'third request bypassed the concurrency limit');
+        limiter.release();
+        await third;
+        assert(thirdGranted, 'releasing a slot did not wake the queued request');
+      });
+
+      test('an aborted queued request leaves the scheduler without a leaked slot', async () => {
+        const limiter = new api.RateLimiter(1, 0);
+        const controller = new AbortController();
+        await limiter.acquire();
+        const queued = limiter.acquire(controller.signal);
+        controller.abort();
+
+        const error = await expectRejection(queued, 'aborted queued request was granted');
+        assert(error.name === 'AbortError', 'queued cancellation returned the wrong error type');
+        limiter.release();
+
+        await limiter.acquire();
+        assert(limiter.activeRequests === 1, 'cancelled waiter leaked a scheduler slot');
+      });
+
+      test('configuration updates clamp concurrency into the supported range', () => {
+        const limiter = new api.RateLimiter(3, 0);
+        limiter.applyConfig({ maxConcurrent: 99 });
+        assert(limiter.maxConcurrent === 12, 'maximum concurrency was not clamped to 12');
+        limiter.applyConfig({ maxConcurrent: 0 });
+        assert(limiter.maxConcurrent === 1, 'minimum concurrency was not clamped to 1');
+        limiter.applyConfig({ maxConcurrent: 'invalid' });
+        assert(limiter.maxConcurrent === 1, 'invalid configuration discarded the active limit');
+      });
+
+      test('retry uses exponential backoff only for rate-limit failures', async () => {
+        const delays = [];
+        let attempts = 0;
+        const result = await api.withRetry(async () => {
+          attempts++;
+          if (attempts < 3) throw new Error('429 too many requests');
+          return 'ok';
+        }, {
+          maxRetries: 3,
+          baseDelay: 50,
+          sleep: async delay => delays.push(delay)
+        });
+
+        assert(result === 'ok' && attempts === 3, 'retry did not recover after rate limiting');
+        assert(delays.join(',') === '50,100', `unexpected retry delays: ${delays}`);
+      });
+
+      test('non-retryable and abort errors fail immediately', async () => {
+        let nonRetryableAttempts = 0;
+        await expectRejection(api.withRetry(async () => {
+          nonRetryableAttempts++;
+          throw new Error('invalid API key');
+        }, {
+          sleep: async () => {}
+        }), 'non-retryable error unexpectedly resolved');
+        assert(nonRetryableAttempts === 1, 'non-retryable error was retried');
+
+        let abortAttempts = 0;
+        const abortError = new Error('aborted');
+        abortError.name = 'AbortError';
+        await expectRejection(api.withRetry(async () => {
+          abortAttempts++;
+          throw abortError;
+        }, {
+          sleep: async () => {}
+        }), 'abort error unexpectedly resolved');
+        assert(abortAttempts === 1, 'abort error was retried');
+      });
+
+      test('retry backoff is cancellable and never starts another attempt', async () => {
+        const controller = new AbortController();
+        let attempts = 0;
+        let backoffSignal = null;
+        const request = api.withRetry(async () => {
+          attempts++;
+          throw new Error('429 too many requests');
+        }, {
+          maxRetries: 3,
+          baseDelay: 10000,
+          signal: controller.signal,
+          sleep: (delay, signal) => {
+            assert(delay === 10000, `unexpected first retry delay: ${delay}`);
+            backoffSignal = signal;
+            return new Promise((resolve, reject) => {
+              signal.addEventListener('abort', () => {
+                reject(api.createAbortError(signal.reason));
+              }, { once: true });
+            });
+          }
+        });
+
+        await flushMicrotasks();
+        assert(backoffSignal === controller.signal,
+          'retry backoff did not receive the caller cancellation signal');
+        controller.abort();
+
+        const error = await expectRejection(
+          request,
+          'cancelled retry backoff unexpectedly resumed'
+        );
+        assert(error.name === 'AbortError',
+          'cancelled retry backoff returned the wrong error type');
+        assert(attempts === 1,
+          `cancelled retry backoff started ${attempts} provider attempts`);
+      });
+
+      test('default backoff sleep rejects promptly when aborted', async () => {
+        const controller = new AbortController();
+        const waiting = api.sleep(10000, controller.signal);
+        controller.abort();
+
+        const error = await expectRejection(
+          waiting,
+          'aborted sleep unexpectedly kept waiting'
+        );
+        assert(error.name === 'AbortError', 'aborted sleep returned the wrong error type');
+      });
+
+      const failures = [];
+      for (const item of tests) {
+        try {
+          await item.fn();
+        } catch (error) {
+          failures.push({ name: item.name, error: error.stack || error.message });
+        }
+      }
+      return { total: tests.length, failures };
+    };
+  </script>
+</body>
+</html>

@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Content filter browser tests</title>
+</head>
+<body>
+  <script src="../shared/content-signals.js"></script>
+  <script src="../shared/content-unit-classifier.js"></script>
+  <script src="../shared/content-ui-policy.js"></script>
+  <script src="../shared/content-filter.js"></script>
+  <script>
+    window.runContentFilterTests = () => {
+      const filter = window.OITContentFilter;
+      const tests = [];
+      const assert = (condition, message) => {
+        if (!condition) throw new Error(message);
+      };
+      const test = (name, fn) => tests.push({ name, fn });
+      const decision = (selector, options = {}) => filter.decideContentFilter(
+        document.querySelector(selector),
+        { scope: 'smart', ...options }
+      );
+
+      test('page shells are skipped as whole subtrees in smart scope', () => {
+        document.body.innerHTML = `
+          <nav id="nav"><a href="/home">Home navigation</a><span>Products</span></nav>
+          <aside id="aside"><p>Related sidebar description.</p></aside>
+          <footer id="footer"><p>Legal and company information.</p></footer>
+          <form id="form"><label>Search documentation</label></form>
+          <dialog open id="dialog"><p>A visible modal explanation.</p></dialog>
+        `;
+
+        for (const selector of ['#nav', '#aside', '#footer', '#form', '#dialog']) {
+          const result = decision(selector);
+          assert(result.action === 'skip-subtree',
+            `${selector} action was ${result.action}`);
+        }
+      });
+
+      test('share bars are skipped without affecting prose that mentions sharing', () => {
+        document.body.innerHTML = `
+          <section id="share-bar" class="share-tools">
+            <a href="/share">Share</a><a href="/related">Related</a>
+          </section>
+          <article id="story">
+            <p id="prose">Researchers share their findings while related work is
+              discussed in enough detail to form a complete, useful paragraph.</p>
+          </article>
+        `;
+
+        assert(decision('#share-bar').action === 'skip-self', 'share strip was not skipped');
+        assert(decision('#prose').action === 'keep', 'ordinary prose was filtered');
+      });
+
+      test('social source links inside prose do not make the paragraph disposable', () => {
+        document.body.innerHTML = `
+          <main><article>
+            <p id="source-copy">
+              This report was produced by the research team and
+              <a href="https://social.example/source">shared with the community</a>
+              after a detailed review.
+            </p>
+          </article></main>
+        `;
+        const article = document.querySelector('article');
+        const result = decision('#source-copy', {
+          contentRoot: article,
+          trustedContentRoot: true
+        });
+
+        assert(result.action === 'keep', `source paragraph action was ${result.action}`);
+      });
+
+      test('all-link headings require a trusted article or main context', () => {
+        document.body.innerHTML = `
+          <h1 id="loose"><a href="/story">A linked story headline</a></h1>
+          <main id="main"><article><h1 id="trusted"><a href="/story">A trusted story headline</a></h1></article></main>
+        `;
+        const main = document.querySelector('#main');
+
+        assert(decision('#loose').action === 'skip-self', 'untrusted linked heading was kept');
+        assert(decision('#trusted', {
+          contentRoot: main,
+          trustedContentRoot: true
+        }).action === 'keep', 'trusted linked heading was filtered');
+      });
+
+      test('adaptive smart scope keeps navigation labels while auxiliary shells stay excluded', () => {
+        document.body.innerHTML = `
+          <nav id="nav"><a id="docs-link" href="/docs">Documentation</a></nav>
+          <aside id="aside"><p id="aside-copy">Related sidebar description.</p></aside>
+        `;
+
+        assert(decision('#nav', { scope: 'smart' }).action === 'skip-subtree',
+          'non-adaptive smart scope unexpectedly opened the navigation shell');
+        assert(decision('#docs-link', {
+          scope: 'smart',
+          adaptiveUi: true
+        }).action === 'keep', 'adaptive smart scope rejected a visible navigation label');
+        assert(decision('#nav', {
+          scope: 'smart',
+          adaptiveUi: true
+        }).action === 'skip-subtree', 'adaptive smart scope emitted the navigation container');
+        assert(decision('#aside-copy', {
+          scope: 'smart',
+          adaptiveUi: true
+        }).action === 'skip-self', 'adaptive smart scope opened auxiliary page chrome');
+        assert(decision('#docs-link', { scope: 'full' }).action === 'keep',
+          'full scope discarded visible navigation');
+      });
+
+      const failures = [];
+      for (const item of tests) {
+        try {
+          item.fn();
+        } catch (error) {
+          failures.push({ name: item.name, error: error.stack || error.message });
+        }
+      }
+      return { total: tests.length, failures };
+    };
+  </script>
+</body>
+</html>

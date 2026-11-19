@@ -20,6 +20,7 @@ const DEFAULT_GLOBAL_CONFIG = {
   sourceLang: 'auto',      // 源语言
   targetLang: 'zh-CN',     // 目标语言
   translationStyle: 'accurate',
+  translationScope: 'smart',
   showOriginal: true,
   autoDetect: true,
   showFab: true,
@@ -236,6 +237,7 @@ const ConfigManager = {
       sourceLang: global.sourceLang || 'auto',
       targetLang: global.targetLang || 'zh-CN',
       translationStyle: global.translationStyle || 'accurate',
+      translationScope: global.translationScope === 'full' ? 'full' : 'smart',
       showOriginal: global.showOriginal !== false,
       autoDetect: global.autoDetect !== false,
       showFab: global.showFab !== false,  // 🔥 添加悬浮按钮配置
@@ -290,6 +292,7 @@ let elements = {};
 // 当前状态（注意：currentConfig 已在上方 ConfigManager 前声明）
 // let currentConfig 在第296行已声明
 let isTranslating = false;
+let isSessionActive = false;
 
 // ==================== 状态同步管理器 ====================
 /**
@@ -340,15 +343,17 @@ const StateManager = {
   /**
    * 同步翻译状态到 UI
    * 调用 setTranslatingState 来确保统一更新
-   * @param {boolean} translating - 是否正在翻译
+   * @param {boolean} translating - 当前流水线是否忙碌
+   * @param {boolean} sessionActive - 是否仍在观察页面动态内容
    */
-  syncTranslatingState(translating) {
+  syncTranslatingState(translating, sessionActive = translating) {
     // 使用统一的 setTranslatingState 函数
     if (typeof setTranslatingState === 'function') {
-      setTranslatingState(translating);
+      setTranslatingState(translating, { sessionActive });
     } else {
       // 回退方案
       isTranslating = translating;
+      isSessionActive = sessionActive;
     }
   },
   
@@ -408,18 +413,7 @@ const StateManager = {
     const contentState = await this.getContentState();
     
     if (contentState) {
-      // 应用翻译状态
-      if (contentState.isTranslating) {
-        this.syncTranslatingState(true);
-        updateStatus('working', t('translating'), '');
-      } else if (contentState.hasTranslations) {
-        this.syncTranslatingState(false);
-        showRestoreButton();
-        updateStatus('success', t('translateComplete'), `${contentState.translatedCount || 0} segments`);
-      } else {
-        this.syncTranslatingState(false);
-        hideRestoreButton();
-      }
+      applyTranslationState(contentState);
     }
     
     console.log('[StateManager] Initialized:', { 
@@ -433,16 +427,38 @@ const StateManager = {
 // 初始化
 document.addEventListener('DOMContentLoaded', async () => {
   initElements();
+  renderExtensionVersion();
   await loadConfig();
   applyI18n();
   initEventListeners();
   updateUI();
+  if (window.location.hash === '#settings') {
+    showPanel('settings');
+  }
   // 🔥 性能优化：不阻塞 UI 渲染，异步同步翻译状态
   // initSync 中的 getContentState() 需要 ping content script，
   // 在大多数页面上 content script 未加载，会触发超时等待。
   // 改为后台静默更新，UI 立即可用。
   StateManager.initSync();
 });
+
+function renderExtensionVersion() {
+  if (!elements.extensionVersion) return;
+
+  try {
+    const version = chrome.runtime?.getManifest?.().version?.trim();
+    if (!version) {
+      throw new Error('Manifest version is unavailable');
+    }
+    elements.extensionVersion.textContent = `v${version}`;
+    elements.extensionVersion.title = `Open Immerse Translate v${version}`;
+    elements.extensionVersion.dataset.version = version;
+  } catch (error) {
+    elements.extensionVersion.textContent = 'v?';
+    elements.extensionVersion.title = 'Extension version is unavailable';
+    console.warn('[Popup] Failed to read extension version:', error);
+  }
+}
 
 // 应用国际化
 function applyI18n() {
@@ -508,6 +524,7 @@ function initElements() {
     
     // 翻译操作
     translatePageBtn: document.getElementById('translatePageBtn'),
+    subtitleBtn: document.getElementById('subtitleBtn'),
     stopTranslateBtn: document.getElementById('stopTranslateBtn'),
     restoreBtn: document.getElementById('restoreBtn'),
     
@@ -517,6 +534,7 @@ function initElements() {
     currentTargetLang: document.getElementById('currentTargetLang'),
     apiStatus: document.getElementById('apiStatus'),
     apiStatusItem: document.getElementById('apiStatusItem'),
+    extensionVersion: document.getElementById('extensionVersion'),
     
     // 设置表单
     providerSelect: document.getElementById('providerSelect'),
@@ -530,6 +548,7 @@ function initElements() {
     sourceLang: document.getElementById('sourceLang'),
     targetLang: document.getElementById('targetLang'),
     translationStyle: document.getElementById('translationStyle'),
+    translationScope: document.getElementById('translationScope'),
     showOriginal: document.getElementById('showOriginal'),
     autoDetect: document.getElementById('autoDetect'),
     
@@ -689,6 +708,7 @@ async function saveConfig() {
       sourceLang: currentConfig.sourceLang,
       targetLang: currentConfig.targetLang,
       translationStyle: currentConfig.translationStyle,
+      translationScope: currentConfig.translationScope,
       showOriginal: currentConfig.showOriginal,
       autoDetect: currentConfig.autoDetect,
       showFab: currentConfig.showFab,
@@ -740,6 +760,9 @@ function initEventListeners() {
   
   // 翻译操作
   elements.translatePageBtn.addEventListener('click', handleTranslatePage);
+  if (elements.subtitleBtn) {
+    elements.subtitleBtn.addEventListener('click', handleOpenSubtitleWorkspace);
+  }
   elements.stopTranslateBtn.addEventListener('click', handleStopTranslate);
   if (elements.restoreBtn) {
     elements.restoreBtn.addEventListener('click', handleRestore);
@@ -793,6 +816,9 @@ function updateUI() {
   }
   elements.targetLang.value = currentConfig.targetLang;
   elements.translationStyle.value = currentConfig.translationStyle;
+  if (elements.translationScope) {
+    elements.translationScope.value = currentConfig.translationScope === 'full' ? 'full' : 'smart';
+  }
   elements.showOriginal.checked = currentConfig.showOriginal;
   elements.autoDetect.checked = currentConfig.autoDetect;
   // 更新主界面的 FAB 开关
@@ -984,23 +1010,15 @@ async function injectContentScript(tabId) {
   if (!tabId || typeof tabId !== 'number') return false;
   
   try {
-    // 先尝试注入 CSS（可能已存在，忽略错误）
-    try {
-    await chrome.scripting.insertCSS({
-        target: { tabId },
-      files: ['styles/content.css']
+    await OITContentScriptInjection.injectContentScriptAssets({
+      runtime: chrome.runtime,
+      scripting: chrome.scripting
+    }, tabId, {
+      onCssError() {
+        // CSS 注入是幂等的；旧版本遗留页面可能尚未加载最新样式。
+        console.log('[Popup] CSS may already be injected');
+      }
     });
-    } catch (cssError) {
-      // CSS 可能已经存在，忽略
-      console.log('[Popup] CSS may already be injected');
-    }
-    
-    // 注入 JS
-    await chrome.scripting.executeScript({
-      target: { tabId },
-      files: ['content/content.js']
-    });
-    
     return true;
   } catch (error) {
     const msg = error?.message || '';
@@ -1008,14 +1026,14 @@ async function injectContentScript(tabId) {
     // 检查是否是"脚本已存在"类型的错误（这其实是好的）
     if (msg.includes('Cannot access') || msg.includes('not allowed')) {
       logToConsole('此页面不支持脚本注入', 'warning');
-    return false;
-  }
+      return false;
+    }
     
     // 检查是否是扩展上下文失效
     if (msg.includes('Extension context invalidated')) {
       logToConsole('扩展已更新，请刷新页面', 'warning');
       return false;
-}
+    }
 
     // 其他错误，可能脚本已经存在
     console.warn('[Popup] Script injection result:', msg);
@@ -1161,14 +1179,21 @@ function checkUrlCanTranslate(url) {
 
 // ==================== 翻译控制 ====================
 
+function handleOpenSubtitleWorkspace() {
+  chrome.tabs.create({
+    url: chrome.runtime.getURL('subtitle/subtitle.html')
+  });
+  window.close();
+}
+
 /**
  * 处理翻译页面（主入口）
  */
 async function handleTranslatePage() {
   const t = window.i18n.t;
   
-  // 如果正在翻译，则停止
-  if (isTranslating) {
+  // 活跃会话可能已经完成当前批次但仍在监听 SPA 动态内容。
+  if (isSessionActive) {
     await handleStopTranslate();
     return;
   }
@@ -1293,7 +1318,7 @@ function handleTranslationError(error, t) {
   showToast(userMessage, 'error');
   logToConsole(logMessage, 'error');
   updateStatus('error', t('translateError') || '翻译出错', userMessage);
-    setTranslatingState(false);
+  setTranslatingState(false, { sessionActive: false });
 }
 
 // 设置翻译状态
@@ -1302,22 +1327,25 @@ function handleTranslationError(error, t) {
  * 此函数同时更新：1. 内存状态 2. UI 显示
  * 确保 Popup 和 FAB 状态一致
  */
-function setTranslatingState(translating) {
+function setTranslatingState(translating, options = {}) {
   const t = window.i18n.t;
+  const sessionActive = options.sessionActive ?? translating;
+  const pipelineBusy = Boolean(translating && sessionActive);
   
   // 更新内存状态
-  isTranslating = translating;
+  isTranslating = pipelineBusy;
+  isSessionActive = Boolean(sessionActive);
   
-  // 更新 UI
-  if (translating) {
-    updateStatus('working', t('translating'), t('translatingDesc'));
+  // 按钮表达“结束会话”的意图，加载动画只表达“当前流水线忙碌”。
+  if (isSessionActive) {
     elements.translatePageBtn.innerHTML = `
       <svg viewBox="0 0 24 24" fill="none">
         <rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor"/>
       </svg>
       <span data-i18n="stopTranslate">${t('stopTranslate')}</span>
     `;
-    elements.translatePageBtn.classList.add('translating');
+    elements.translatePageBtn.classList.add('session-active');
+    elements.translatePageBtn.classList.toggle('translating', pipelineBusy);
   } else {
     elements.translatePageBtn.innerHTML = `
       <svg viewBox="0 0 24 24" fill="none">
@@ -1326,6 +1354,11 @@ function setTranslatingState(translating) {
       <span data-i18n="translatePage">${t('translatePage')}</span>
     `;
     elements.translatePageBtn.classList.remove('translating');
+    elements.translatePageBtn.classList.remove('session-active');
+  }
+
+  if (pipelineBusy) {
+    updateStatus('working', t('translating'), t('translatingDesc'));
   }
 }
 
@@ -1350,14 +1383,14 @@ async function handleStopTranslate() {
       }
     }
     
-    setTranslatingState(false);
+    setTranslatingState(false, { sessionActive: false });
     updateStatus('idle', t('stopped'), t('stoppedDesc'));
     logToConsole(t('consoleStopped') || '翻译已停止', 'warning');
     
   } catch (error) {
     console.error('[Popup] Stop error:', error);
     // 确保状态被重置
-    setTranslatingState(false);
+    setTranslatingState(false, { sessionActive: false });
   }
 }
 
@@ -1365,7 +1398,7 @@ async function handleStopTranslate() {
  * 重置翻译按钮状态（保持向后兼容）
  */
 function resetTranslateButton() {
-  setTranslatingState(false);
+  setTranslatingState(false, { sessionActive: false });
 }
 
 /**
@@ -1495,6 +1528,7 @@ async function handleSaveSettings() {
     sourceLang: elements.sourceLang ? elements.sourceLang.value : 'auto',
     targetLang: elements.targetLang.value,
     translationStyle: elements.translationStyle.value,
+    translationScope: elements.translationScope?.value === 'full' ? 'full' : 'smart',
     showOriginal: elements.showOriginal.checked,
     autoDetect: elements.autoDetect.checked,
     customPrompt: elements.customPrompt.value.trim(),
@@ -1538,25 +1572,32 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const t = window.i18n.t;
   
   if (message.action === 'translationComplete') {
-    // 🔥 使用 StateManager 同步状态
-    StateManager.syncTranslatingState(false);
+    const sessionActive = message.sessionActive !== false;
+    StateManager.syncTranslatingState(false, sessionActive);
     updateStatus('success', t('translateComplete'), `${message.count || 0} segments`);
     const completeMsg = t('consoleCompleted').replace('{count}', message.count || 0);
     logToConsole(completeMsg, 'success');
-    showRestoreButton();
+    if (message.hasTranslations || message.count > 0) {
+      showRestoreButton();
+    } else {
+      hideRestoreButton();
+    }
     
   } else if (message.action === 'translationError') {
-    StateManager.syncTranslatingState(false);
+    const sessionActive = message.sessionActive !== false;
+    StateManager.syncTranslatingState(false, sessionActive);
     updateStatus('error', t('translateError'), message.error || '');
     const friendlyError = parseErrorMessage({ message: message.error });
     logToConsole(friendlyError, 'error');
     showToast(friendlyError, 'error');
+    if (message.hasTranslations || message.translatedCount > 0) {
+      showRestoreButton();
+    } else {
+      hideRestoreButton();
+    }
     
   } else if (message.action === 'translationProgress') {
-    // 确保翻译状态为 true
-    if (!isTranslating) {
-      StateManager.syncTranslatingState(true);
-    }
+    StateManager.syncTranslatingState(true, true);
     updateStatus('working', t('translating'), `${message.current}/${message.total}`);
     if (message.current % 5 === 0 || message.current === message.total) {
       const progressMsg = t('consoleTranslating')
@@ -1566,26 +1607,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
     
   } else if (message.action === 'translationStateChanged') {
-    // 🔥 FAB 和 Popup 之间的状态同步（来自 Content Script）
-    if (message.status === 'translating') {
-      StateManager.syncTranslatingState(true);
-      updateStatus('working', t('translating'), '');
-      logToConsole(t('consoleStarting'), 'info');
-    } else if (message.status === 'stopped') {
-      StateManager.syncTranslatingState(false);
-      updateStatus('idle', t('stopped'), t('stoppedDesc'));
-      logToConsole(t('consoleStopped'), 'warning');
-      if (message.hasTranslations) {
-        showRestoreButton();
-      } else {
-        hideRestoreButton();
-      }
-    } else if (message.status === 'idle') {
-      StateManager.syncTranslatingState(false);
-      updateStatus('idle', t('ready'), t('readyDesc'));
-      hideRestoreButton();
-      logToConsole(t('consoleRestored') || '已恢复原样', 'info');
-    }
+    applyTranslationState({
+      ...message,
+      isTranslating: message.pipelineBusy ?? message.isTranslating,
+    });
     
   } else if (message.action === 'consoleLog') {
     logToConsole(message.text, message.type || 'info');
@@ -1602,23 +1627,57 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     // 更新内存配置
     if (currentConfig) {
       currentConfig.showFab = message.showFab;
+    }
   }
-}
 });
 
 // 应用翻译状态到 UI（供 StateManager 使用）
 function applyTranslationState(state) {
   const t = window.i18n.t;
-  
-  if (state.isTranslating) {
-    StateManager.syncTranslatingState(true);
+  const hasTranslations = Boolean(
+    state.hasTranslations || Number(state.translatedCount) > 0
+  );
+  const phase = state.phase;
+  const phaseBusy = phase === 'scanning' || phase === 'translating';
+  const pipelineBusy = typeof state.pipelineBusy === 'boolean'
+    ? state.pipelineBusy
+    : typeof state.isTranslating === 'boolean'
+      ? state.isTranslating
+      : phaseBusy;
+  const sessionActive = typeof state.sessionActive === 'boolean'
+    ? state.sessionActive
+    : pipelineBusy || phase === 'completed' || phase === 'failed';
+
+  if (phase === 'scanning' || phase === 'translating') {
+    StateManager.syncTranslatingState(pipelineBusy, sessionActive);
+    updateStatus('working', t('translating'), pipelineBusy ? '' : t('translatingDesc'));
+  } else if (phase === 'completed') {
+    StateManager.syncTranslatingState(false, sessionActive);
+    hasTranslations ? showRestoreButton() : hideRestoreButton();
+    updateStatus('success', t('translateComplete'), `${state.translatedCount || 0} segments`);
+  } else if (phase === 'failed') {
+    StateManager.syncTranslatingState(false, sessionActive);
+    hasTranslations ? showRestoreButton() : hideRestoreButton();
+    updateStatus('error', t('translateError'), state.lastError || '');
+  } else if (phase === 'stopped') {
+    StateManager.syncTranslatingState(false, false);
+    hasTranslations ? showRestoreButton() : hideRestoreButton();
+    updateStatus('idle', t('stopped'), t('stoppedDesc'));
+    if (hasTranslations) logToConsole(t('consoleStopped'), 'warning');
+  } else if (phase === 'idle') {
+    StateManager.syncTranslatingState(false, false);
+    hideRestoreButton();
+    updateStatus('idle', t('ready'), t('readyDesc'));
+  } else if (pipelineBusy) {
+    // Backward compatibility for content scripts that predate lifecycle phases.
+    StateManager.syncTranslatingState(true, sessionActive);
     updateStatus('working', t('translating'), '');
-  } else if (state.hasTranslations) {
-    StateManager.syncTranslatingState(false);
+  } else if (hasTranslations) {
+    StateManager.syncTranslatingState(false, sessionActive);
     showRestoreButton();
     updateStatus('success', t('translateComplete'), `${state.translatedCount || 0} segments`);
   } else {
-    StateManager.syncTranslatingState(false);
+    StateManager.syncTranslatingState(false, false);
     hideRestoreButton();
     updateStatus('idle', t('ready'), t('readyDesc'));
   }

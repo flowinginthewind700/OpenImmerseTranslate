@@ -80,6 +80,12 @@ const PROVIDER_DEFAULTS = {
   }
 };
 
+if (typeof globalThis !== 'undefined') {
+  globalThis.OITProviders = Object.freeze({
+    PROVIDER_DEFAULTS
+  });
+}
+
 function getDefaultEndpoint(providerId) {
   return PROVIDER_DEFAULTS[providerId]?.endpoint ?? '';
 }
@@ -101,7 +107,11 @@ function checkNeedsApiKey(providerId) {
  * We use a multi-character delimiter that's highly unlikely to appear in
  * natural text, and we also support JSON array parsing as a fallback.
  */
-const TRANSLATION_SEPARATOR = '\n<<<OIT_SEP>>>\n';
+const providerTranslationCore = globalThis.OITTranslationCore;
+
+if (!providerTranslationCore) {
+  throw new Error('OIT translation core must be loaded before shared/providers.js');
+}
 
 /**
  * Build the user prompt that tells the LLM to use our separator.
@@ -110,13 +120,7 @@ const TRANSLATION_SEPARATOR = '\n<<<OIT_SEP>>>\n';
  * @returns {string}
  */
 function buildTranslationPrompt(texts, targetLang) {
-  const joined = texts.map((t, i) => `${i + 1}. ${t}`).join('\n\n');
-  return `Translate the following numbered texts into ${targetLang}. 
-Output each translation on its own line, separated by the delimiter "${TRANSLATION_SEPARATOR}".
-Do NOT include the original numbers in your output.
-Only output the translations, nothing else.
-
-${joined}`;
+  return providerTranslationCore.buildUserPrompt(texts, { targetLang }, {});
 }
 
 /**
@@ -130,30 +134,20 @@ ${joined}`;
  * @param {string} content - Raw LLM response
  * @returns {string[]} Array of individual translations
  */
-function parseTranslations(content) {
+function parseTranslations(content, expectedCount) {
   if (!content || typeof content !== 'string') return [];
-  
-  const trimmed = content.trim();
-  
-  // Strategy 1: JSON array (most robust)
-  if (trimmed.startsWith('[')) {
-    try {
-      const arr = JSON.parse(trimmed);
-      if (Array.isArray(arr)) {
-        return arr.map(p => String(p).trim()).filter(p => p.length > 0);
-      }
-    } catch (e) {
-      // JSON parse failed, fall through to delimiter-based parsing
-    }
+
+  if (Number.isInteger(expectedCount) && expectedCount > 0) {
+    return providerTranslationCore.parseBatchTranslations(content, expectedCount);
   }
-  
-  // Strategy 2: OIT_SEP delimiter
+
+  // Legacy responses are tolerated only when the caller did not request a
+  // strict array. The strict path above never filters or reorders items.
   if (content.includes('<<<OIT_SEP>>>')) {
     const parts = content.split(/\s*<<<OIT_SEP>>>\s*/);
     return parts.map(p => p.trim()).filter(p => p.length > 0);
   }
-  
-  // Strategy 3: Legacy [SEP] fallback
+
   const parts = content.split(/\s*\[SEP\]\s*/);
   return parts.map(p => p.trim()).filter(p => p.length > 0);
 }
